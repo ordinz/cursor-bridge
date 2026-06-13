@@ -1,0 +1,21 @@
+{
+  "name": "cursor-bridge",
+  "version": "1.0.0",
+  "description": "Local HTTP bridge and oversight UI for Cursor SDK agents",
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "start": "node scripts/run.mjs",
+    "build": "pnpm --filter ui build",
+    "bridge": "node bridge.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@cursor/sdk": "^1.0.18",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}

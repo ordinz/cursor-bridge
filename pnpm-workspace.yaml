@@ -1,0 +1,6 @@
+packages:
+  - ui
+
+onlyBuiltDependencies:
+  - sqlite3
+  - "@cursor/sdk-darwin-arm64"

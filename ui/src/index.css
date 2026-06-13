@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: #0a0a0b;
+  color: #e4e4e7;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  overscroll-behavior: none;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  background: #18181b;
+  padding: 0.75rem;
+  font-size: 0.75rem;
+}
+
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  word-break: break-word;
+}
+
+.markdown-body p {
+  margin: 0.5rem 0;
+}
+
+.markdown-body p:first-child {
+  margin-top: 0;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+@supports (-webkit-touch-callout: none) {
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
