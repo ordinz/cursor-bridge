@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Session } from "../lib/types";
 
 interface StatusBarProps {
@@ -15,12 +16,18 @@ export function StatusBar({
   cursorReady,
   bridgeVersion,
 }: StatusBarProps) {
+  const [host, setHost] = useState("localhost:4242");
+
+  useEffect(() => {
+    setHost(window.location.host || "localhost:4242");
+  }, []);
+
   return (
     <footer
-      className="hidden shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-zinc-800 bg-zinc-950 px-4 py-2 font-mono text-[11px] text-zinc-500 lg:flex"
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-800 bg-zinc-950 px-3 py-1.5 font-mono text-[10px] text-zinc-500 sm:px-4 sm:py-2 sm:text-[11px] lg:gap-x-4"
       data-testid="status-bar"
     >
-      <span data-testid="status-port">localhost:4242</span>
+      <span data-testid="status-port">{host}</span>
       <span className={apiOk ? "text-emerald-600" : "text-red-500"}>
         {apiOk ? "bridge ok" : "bridge down"}
       </span>
@@ -28,14 +35,24 @@ export function StatusBar({
         {cursorReady ? "cursor ready" : "cursor not ready"}
       </span>
       {bridgeVersion && (
-        <span data-testid="status-version">v{bridgeVersion}</span>
+        <span className="hidden sm:inline" data-testid="status-version">
+          v{bridgeVersion}
+        </span>
       )}
       {session && (
         <>
-          <span data-testid="status-session">session={session.sessionId}</span>
-          <span data-testid="status-agent">agent={session.agentId}</span>
-          <span data-testid="status-cwd">cwd={session.cwd}</span>
-          <span data-testid="status-model">model={session.model}</span>
+          <span className="hidden lg:inline" data-testid="status-session">
+            session={session.sessionId}
+          </span>
+          <span className="hidden lg:inline" data-testid="status-agent">
+            agent={session.agentId}
+          </span>
+          <span className="hidden lg:inline" data-testid="status-cwd">
+            cwd={session.cwd}
+          </span>
+          <span className="hidden lg:inline" data-testid="status-model">
+            model={session.model}
+          </span>
         </>
       )}
       <span data-testid="status-run">run={runStatus}</span>

@@ -100,6 +100,8 @@ Configure allowlist via `ENABLED_PROJECTS` (default `www,app`).
 }
 ```
 
+After the first successful chat turn, the bridge generates a short title via a lightweight LLM call and persists it to the local agent store. Until then, the session shows an interim name derived from the first line of the user's prompt. If title generation fails, the interim name is kept. Configure the naming model with `AGENT_NAMING_MODEL` (default: `"default"`).
+
 ---
 
 ### `GET /api/sessions/:id`
@@ -108,18 +110,33 @@ Returns the same shape as create/resume. Use this to poll session state between 
 
 ---
 
+### `GET /api/sessions/:id/events`
+
+Long-lived **watch stream** for a session. Receives the same SSE events as `POST …/chat` (session, status, user, assistant deltas, tool_call, tool_result, error, done) plus `: heartbeat` comments every 15s.
+
+Use this to mirror runs in the oversight UI or any second client while another agent owns the chat POST.
+
+| Query | Default | Description |
+|-------|---------|-------------|
+| `replay` | `1` | When `1`, buffered events from the current run are sent immediately on connect. Set `replay=0` if the client already has history and only wants new events. |
+
+**404** if the session does not exist. The stream stays open until the client disconnects or the session is deleted.
+
+---
+
 ### `POST /api/sessions/:id/chat`
 
 **Request:**
 
 ```json
-{ "prompt": "Fix the login bug", "allowOverlap": false }
+{ "prompt": "Fix the login bug", "allowOverlap": false, "source": "api" }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `prompt` | required | User/agent message (1–100,000 chars, non-empty after trim) |
 | `allowOverlap` | `false` | If `false`, returns **409** when a run is already active |
+| `source` | `"api"` | `"api"` or `"manual"` — echoed on the SSE `user` event for UI labeling |
 
 **400 response (invalid prompt):**
 

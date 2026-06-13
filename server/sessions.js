@@ -8,6 +8,7 @@ import {
   SessionBusyError,
   SessionNotFoundError,
 } from "./errors.js";
+import { SessionEventHub } from "./session-events.js";
 
 const IDLE_TIMEOUT_MS = Number(process.env.SESSION_IDLE_MS ?? 30 * 60 * 1000);
 const SNIPPET_MAX = 160;
@@ -16,6 +17,16 @@ export class SessionManager {
   constructor() {
     /** @type {Map<string, SessionRecord>} */
     this.sessions = new Map();
+    this.events = new SessionEventHub();
+  }
+
+  /** @param {object} event @param {import("express").Response} [chatRes] */
+  publishEvent(sessionId, event, chatRes) {
+    this.events.publish(sessionId, event, chatRes);
+  }
+
+  startRunEvents(sessionId) {
+    this.events.startRun(sessionId);
   }
 
   createId() {
@@ -84,6 +95,7 @@ export class SessionManager {
       model,
       name,
       namedFromPrompt: false,
+      namingScheduled: false,
       activeRun: null,
       abortController: null,
       runStatus: "idle",
@@ -122,6 +134,7 @@ export class SessionManager {
       model,
       name: storedName ?? buildAgentName({ project, model }),
       namedFromPrompt,
+      namingScheduled: false,
       activeRun: null,
       abortController: null,
       runStatus: "idle",
@@ -134,6 +147,22 @@ export class SessionManager {
     this.sessions.set(sessionId, record);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
+  }
+
+  setInterimName(sessionId, name) {
+    const record = this.get(sessionId);
+    if (!record || record.namedFromPrompt) return;
+    record.name = name;
+    record.lastActivityAt = Date.now();
+  }
+
+  scheduleNaming(sessionId) {
+    const record = this.get(sessionId);
+    if (!record || record.namedFromPrompt || record.namingScheduled) {
+      return false;
+    }
+    record.namingScheduled = true;
+    return true;
   }
 
   markNamedFromPrompt(sessionId, name) {
@@ -219,6 +248,7 @@ export class SessionManager {
 
     record.agent.close();
     this.sessions.delete(sessionId);
+    this.events.removeSession(sessionId);
     return true;
   }
 

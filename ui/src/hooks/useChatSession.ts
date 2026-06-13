@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   cancelSession,
   createSession,
@@ -103,6 +103,60 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
   return next;
 }
 
+function applyWatchEvent(
+  event: SseEvent,
+  setFeed: Dispatch<SetStateAction<FeedItem[]>>,
+  setSession: Dispatch<SetStateAction<Session | null>>,
+  setRunStatus: Dispatch<SetStateAction<string>>,
+  setError: Dispatch<SetStateAction<string | null>>,
+) {
+  if (event.type === "session") {
+    setSession((prev) =>
+      prev
+        ? {
+            ...prev,
+            sessionId: event.sessionId ?? prev.sessionId,
+            agentId: event.agentId,
+            name: event.name ?? prev.name,
+            runStatus: event.runStatus ?? prev.runStatus,
+            runActive: event.runActive ?? prev.runActive,
+            lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
+          }
+        : prev,
+    );
+    if (event.runActive) {
+      setRunStatus("running");
+    }
+    return;
+  }
+
+  if (event.type === "done") {
+    const status = event.status === "finished" ? "idle" : event.status;
+    setRunStatus(status);
+    setSession((prev) =>
+      prev
+        ? {
+            ...prev,
+            runStatus: status,
+            runActive: false,
+            lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
+          }
+        : prev,
+    );
+    return;
+  }
+
+  if (event.type === "error") {
+    setError(event.message);
+    setRunStatus("error");
+    setSession((prev) =>
+      prev ? { ...prev, runStatus: "error", runActive: false } : prev,
+    );
+  }
+
+  setFeed((items) => applyEvent(items, event));
+}
+
 export function useChatSession() {
   const [session, setSession] = useState<Session | null>(null);
   const [feed, setFeed] = useState<FeedItem[]>([]);
@@ -110,6 +164,11 @@ export function useChatSession() {
   const [error, setError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const feedRef = useRef<FeedItem[]>([]);
+
+  useEffect(() => {
+    feedRef.current = feed;
+  }, [feed]);
 
   useEffect(() => {
     if (!session) return;
@@ -122,6 +181,47 @@ export function useChatSession() {
       }),
     );
   }, [session]);
+
+  useEffect(() => {
+    if (!session?.sessionId) return;
+
+    const sessionId = session.sessionId;
+    const controller = new AbortController();
+    const replay = feedRef.current.length === 0 ? "1" : "0";
+    let active = true;
+
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/events?replay=${replay}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) {
+          throw new Error(`Watch stream failed (${res.status})`);
+        }
+
+        for await (const event of readSseStream(res)) {
+          if (!active) break;
+          applyWatchEvent(
+            event,
+            setFeed,
+            setSession,
+            setRunStatus,
+            setError,
+          );
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          console.error("Session watch disconnected:", err);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [session?.sessionId]);
 
   useEffect(() => {
     if (!session?.sessionId) return;
@@ -190,24 +290,16 @@ export function useChatSession() {
 
       setError(null);
       setRunStatus("running");
-      setFeed((items) => [
-        ...items,
-        {
-          id: nextId(),
-          kind: "user",
-          text: prompt,
-          source:
-            source === "manual" || source === "api" || source === "history"
-              ? source
-              : undefined,
-        },
-      ]);
 
       abortRef.current?.abort();
       abortRef.current = new AbortController();
 
       try {
-        const res = await postChat(active.sessionId, prompt);
+        const res = await postChat(
+          active.sessionId,
+          prompt,
+          source === "manual" ? "manual" : "api",
+        );
 
         for await (const event of readSseStream(res)) {
           if (event.type === "session") {
@@ -215,12 +307,9 @@ export function useChatSession() {
               prev
                 ? {
                     ...prev,
-                    sessionId: event.sessionId ?? prev.sessionId,
-                    agentId: event.agentId,
                     name: event.name ?? prev.name,
                     runStatus: event.runStatus ?? prev.runStatus,
                     runActive: event.runActive ?? prev.runActive,
-                    lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
                   }
                 : prev,
             );
@@ -234,15 +323,17 @@ export function useChatSession() {
                     ...prev,
                     runStatus: status,
                     runActive: false,
-                    lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
+                    lastActivityAt:
+                      Date.parse(event.timestamp) || prev.lastActivityAt,
                   }
                 : prev,
             );
-          } else {
-            setFeed((items) => applyEvent(items, event));
+          } else if (event.type === "error") {
+            setError(event.message);
+            setRunStatus("error");
           }
         }
-        setRunStatus("idle");
+        setRunStatus((prev) => (prev === "running" ? "idle" : prev));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Chat failed";
         setError(message);

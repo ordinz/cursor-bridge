@@ -219,9 +219,88 @@ test("openapi.json describes core routes", async () => {
     assert.ok(spec.paths["/health"]);
     assert.ok(spec.paths["/projects"]);
     assert.ok(spec.paths["/sessions/{id}"]);
+    assert.ok(spec.paths["/sessions/{id}/events"]);
     assert.ok(spec.paths["/sessions"]);
     assert.ok(spec.paths["/sessions/{id}/chat"]);
     assert.ok(spec.paths["/sessions/{id}/cancel"]);
+  });
+});
+
+async function readSseUntil(
+  response,
+  stopWhen,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("No response body");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const events = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      for (const line of part.split("\n")) {
+        if (line.startsWith("data: ")) {
+          const event = JSON.parse(line.slice(6));
+          events.push(event);
+          if (stopWhen(event)) {
+            await reader.cancel();
+            return events;
+          }
+        }
+      }
+    }
+  }
+
+  return events;
+}
+
+test("watch stream receives chat events", async () => {
+  await withTestServer(async ({ sessions, base }) => {
+    const id = seedIdleSession(sessions);
+
+    const watchRes = await fetch(`${base}/sessions/${id}/events`);
+    assert.equal(watchRes.status, 200);
+
+    const watchPromise = readSseUntil(
+      watchRes,
+      (event) => event.type === "done" || event.type === "error",
+    );
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    const chatEvents = await readSseUntil(
+      await fetch(`${base}/sessions/${id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "hello" }),
+      }),
+      (event) => event.type === "done" || event.type === "error",
+    );
+
+    const watchEvents = await watchPromise;
+
+    assert.ok(chatEvents.some((e) => e.type === "assistant"));
+    assert.ok(watchEvents.some((e) => e.type === "assistant"));
+    assert.ok(watchEvents.some((e) => e.type === "user" && e.text === "hello"));
+  });
+});
+
+test("GET /sessions/:id/events returns 404 for missing session", async () => {
+  await withTestServer(async ({ base }) => {
+    const res = await fetch(
+      `${base}/sessions/33333333-3333-4333-8333-333333333333/events`,
+    );
+    assert.equal(res.status, 404);
   });
 });
 

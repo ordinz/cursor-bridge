@@ -1,4 +1,4 @@
-import { createSseEvent, writeSseEvent } from "./sse-events.js";
+import { createSseEvent } from "./sse-events.js";
 
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 
@@ -82,7 +82,7 @@ export function serializeSdkEvent(event, sessionId) {
   }
 }
 
-function startHeartbeat(res, intervalMs = HEARTBEAT_INTERVAL_MS) {
+export function startHeartbeat(res, intervalMs = HEARTBEAT_INTERVAL_MS) {
   const timer = setInterval(() => {
     if (!res.writableEnded) {
       writeHeartbeat(res);
@@ -101,23 +101,37 @@ function startHeartbeat(res, intervalMs = HEARTBEAT_INTERVAL_MS) {
  * - On failure: one `error` event (no `done`)
  * - On cancel: `status` + one `done` with status cancelled
  */
-export async function streamRun(res, run, { sessionId, onEvent, signal } = {}) {
+export async function streamRun(
+  res,
+  run,
+  { sessionId, onEvent, signal, publish } = {},
+) {
   const heartbeat = startHeartbeat(res);
   let doneEmitted = false;
   let errorEmitted = false;
+
+  const emit = (payload) => {
+    if (!payload) return;
+    onEvent?.(payload);
+    if (publish) {
+      publish(payload);
+    } else if (!res.writableEnded) {
+      writeSse(res, payload);
+    }
+  };
 
   const emitDone = (fields) => {
     if (doneEmitted || errorEmitted) return null;
     doneEmitted = true;
     const done = createSseEvent("done", sessionId, fields);
-    writeSse(res, done);
+    emit(done);
     return done;
   };
 
   const emitError = (message, code = "RUN_FAILED") => {
     if (doneEmitted || errorEmitted) return null;
     errorEmitted = true;
-    writeSseEvent(res, "error", sessionId, { message, code });
+    emit(createSseEvent("error", sessionId, { message, code }));
     return true;
   };
 
@@ -130,18 +144,16 @@ export async function streamRun(res, run, { sessionId, onEvent, signal } = {}) {
         break;
       }
 
-      const payload = serializeSdkEvent(event, sessionId);
-      if (payload) {
-        onEvent?.(payload);
-        writeSse(res, payload);
-      }
+      emit(serializeSdkEvent(event, sessionId));
     }
 
     if (signal?.aborted) {
-      writeSseEvent(res, "status", sessionId, {
-        status: "CANCELLED",
-        message: "Run cancelled",
-      });
+      emit(
+        createSseEvent("status", sessionId, {
+          status: "CANCELLED",
+          message: "Run cancelled",
+        }),
+      );
       return {
         result: { id: null, status: "cancelled" },
         done: emitDone({ runId: null, status: "cancelled" }),
@@ -152,10 +164,12 @@ export async function streamRun(res, run, { sessionId, onEvent, signal } = {}) {
     const result = await run.wait();
 
     if (result.status === "cancelled") {
-      writeSseEvent(res, "status", sessionId, {
-        status: "CANCELLED",
-        message: "Run cancelled",
-      });
+      emit(
+        createSseEvent("status", sessionId, {
+          status: "CANCELLED",
+          message: "Run cancelled",
+        }),
+      );
       return {
         result,
         done: emitDone({ runId: result.id, status: "cancelled" }),

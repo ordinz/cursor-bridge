@@ -203,6 +203,43 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
           },
         },
       },
+      "/sessions/{id}/events": {
+        get: {
+          operationId: "watchSession",
+          summary: "Watch session events (SSE fan-out from chat runs)",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+            {
+              name: "replay",
+              in: "query",
+              required: false,
+              schema: { type: "string", enum: ["0", "1"], default: "1" },
+              description:
+                "When 1, replay buffered events from the current run on connect",
+            },
+          ],
+          responses: {
+            200: {
+              description:
+                "SSE stream. Same event types as POST /chat. Comment heartbeats `: heartbeat` every 15s.",
+              content: {
+                "text/event-stream": {
+                  schema: { type: "string" },
+                },
+              },
+            },
+            404: {
+              description: "Session not found",
+              content: { "application/json": { schema: errorSchema } },
+            },
+          },
+        },
+      },
       "/sessions/{id}/chat": {
         post: {
           operationId: "chat",
@@ -231,6 +268,11 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
                     allowOverlap: {
                       type: "boolean",
                       default: false,
+                    },
+                    source: {
+                      type: "string",
+                      enum: ["api", "manual"],
+                      default: "api",
                     },
                   },
                 },

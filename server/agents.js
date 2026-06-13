@@ -1,6 +1,11 @@
-import { createAgentPlatform, SqliteLocalAgentStore } from "@cursor/sdk";
+import { Agent, createAgentPlatform, SqliteLocalAgentStore } from "@cursor/sdk";
 import { resolveProject } from "./projects.js";
-import { nameFromPrompt } from "./agent-names.js";
+import {
+  buildNamingPrompt,
+  nameFromPrompt,
+  sanitizeGeneratedName,
+} from "./agent-names.js";
+import { createSseEvent } from "./sse-events.js";
 
 export async function getLocalAgentMeta(agentId, project) {
   const cwd = resolveProject(project);
@@ -19,9 +24,13 @@ export async function getLocalAgentMeta(agentId, project) {
   }
 }
 
-export async function updateLocalAgentName(agentId, project, prompt) {
+export async function setLocalAgentName(
+  agentId,
+  project,
+  name,
+  { namedFromPrompt = true } = {},
+) {
   const cwd = resolveProject(project);
-  const name = nameFromPrompt(prompt);
   const store = await SqliteLocalAgentStore.open({ workspaceRef: cwd });
 
   try {
@@ -33,7 +42,7 @@ export async function updateLocalAgentName(agentId, project, prompt) {
         ...doc,
         name,
         updatedAt: Date.now(),
-        sdkMetadata: { ...doc.sdkMetadata, namedFromPrompt: true },
+        sdkMetadata: { ...doc.sdkMetadata, namedFromPrompt },
       },
     });
 
@@ -41,6 +50,88 @@ export async function updateLocalAgentName(agentId, project, prompt) {
   } finally {
     await store.dispose();
   }
+}
+
+export async function updateLocalAgentName(agentId, project, prompt) {
+  return setLocalAgentName(agentId, project, nameFromPrompt(prompt));
+}
+
+export async function generateAgentNameWithLlm({
+  prompt,
+  assistantSnippet,
+  cwd,
+}) {
+  const model = process.env.AGENT_NAMING_MODEL ?? "default";
+  const metaPrompt = buildNamingPrompt({ prompt, assistantSnippet });
+
+  try {
+    const result = await Agent.prompt(metaPrompt, {
+      apiKey: process.env.CURSOR_API_KEY,
+      model: { id: model },
+      local: { cwd },
+    });
+
+    if (result.status !== "finished") return null;
+
+    const raw =
+      typeof result.result === "string"
+        ? result.result
+        : result.result?.text ?? null;
+
+    if (!raw) return null;
+    return sanitizeGeneratedName(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function finalizeAgentName({
+  sessions,
+  sessionId,
+  agentId,
+  project,
+  cwd,
+  prompt,
+  assistantSnippet,
+}) {
+  let name;
+  try {
+    name = await generateAgentNameWithLlm({
+      prompt,
+      assistantSnippet,
+      cwd,
+    });
+  } catch {
+    name = null;
+  }
+  if (!name) {
+    name = nameFromPrompt(prompt);
+  }
+
+  try {
+    await setLocalAgentName(agentId, project, name);
+  } catch {
+    // Session record still gets the generated name for in-memory clients.
+  }
+
+  sessions.markNamedFromPrompt(sessionId, name);
+
+  const record = sessions.get(sessionId);
+  if (!record) return name;
+
+  sessions.publishEvent(
+    sessionId,
+    createSseEvent("session", sessionId, {
+      agentId,
+      project: record.project,
+      cwd: record.cwd,
+      name,
+      runStatus: record.runStatus,
+      runActive: Boolean(record.activeRun),
+    }),
+  );
+
+  return name;
 }
 
 export async function deleteLocalAgent(agentId, project) {

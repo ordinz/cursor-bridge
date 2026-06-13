@@ -35,11 +35,12 @@ export async function* readSseStream(
 export async function postChat(
   sessionId: string,
   prompt: string,
+  source: "manual" | "api" = "api",
 ): Promise<Response> {
   const res = await fetch(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, source }),
   });
 
   if (!res.ok) {

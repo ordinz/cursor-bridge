@@ -1,7 +1,8 @@
 import express from "express";
 import { Agent, Cursor } from "@cursor/sdk";
 import { buildAgentName } from "./agent-names.js";
-import { deleteLocalAgent, updateLocalAgentName } from "./agents.js";
+import { deleteLocalAgent, finalizeAgentName } from "./agents.js";
+import { nameFromPrompt } from "./agent-names.js";
 import { loadAgentHistory } from "./agent-history.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
 import {
@@ -16,8 +17,8 @@ import {
   resolveProject,
   ProjectError,
 } from "./projects.js";
-import { writeSseEvent } from "./sse-events.js";
-import { setupSse, streamRun } from "./stream.js";
+import { createSseEvent, writeSseEvent } from "./sse-events.js";
+import { setupSse, startHeartbeat, streamRun } from "./stream.js";
 import { VERSION } from "./version.js";
 import {
   InvalidRequestError,
@@ -167,6 +168,25 @@ export function createRouter(sessions) {
     }
   });
 
+  router.get("/sessions/:id/events", (req, res, next) => {
+    try {
+      const id = validateSessionId(req.params.id);
+      sessions.require(id);
+
+      setupSse(res);
+      const heartbeat = startHeartbeat(res);
+      const replay = req.query.replay !== "0";
+      const unsubscribe = sessions.events.subscribe(id, res, { replay });
+
+      req.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/sessions/:id/chat", async (req, res, next) => {
     const { allowOverlap = false } = req.body ?? {};
 
@@ -188,32 +208,37 @@ export function createRouter(sessions) {
 
       try {
         if (!record.namedFromPrompt) {
-          const name = await updateLocalAgentName(
-            record.agentId,
-            record.project,
-            prompt,
-          );
-          sessions.markNamedFromPrompt(id, name);
+          sessions.setInterimName(id, nameFromPrompt(prompt));
           record = sessions.get(id);
         }
 
         sessions.notePrompt(id, prompt);
+        sessions.startRunEvents(id);
 
-        writeSseEvent(res, "session", id, {
-          agentId: record.agentId,
-          project: record.project,
-          cwd: record.cwd,
-          name: record.name,
-          runStatus: "running",
-          runActive: true,
-        });
+        const source = req.body?.source === "manual" ? "manual" : "api";
+        const publish = (event) => sessions.publishEvent(id, event, res);
 
-        writeSseEvent(res, "status", id, {
-          status: "RUNNING",
-          message: "Run started",
-        });
+        publish(
+          createSseEvent("session", id, {
+            agentId: record.agentId,
+            project: record.project,
+            cwd: record.cwd,
+            name: record.name,
+            runStatus: "running",
+            runActive: true,
+          }),
+        );
 
-        writeSseEvent(res, "user", id, { text: prompt, source: "api" });
+        publish(
+          createSseEvent("status", id, {
+            status: "RUNNING",
+            message: "Run started",
+          }),
+        );
+
+        publish(
+          createSseEvent("user", id, { text: prompt, source }),
+        );
 
         const abortController = new AbortController();
         const run = await record.agent.send(prompt);
@@ -222,6 +247,7 @@ export function createRouter(sessions) {
         const outcome = await streamRun(res, run, {
           sessionId: id,
           signal: abortController.signal,
+          publish,
           onEvent: (event) => {
             if (event.type === "assistant" && event.text) {
               sessions.noteAssistantText(id, event.text);
@@ -235,14 +261,33 @@ export function createRouter(sessions) {
           sessions.clearActiveRun(id, "error");
         } else {
           sessions.clearActiveRun(id, "idle");
+
+          if (sessions.scheduleNaming(id)) {
+            const snapshot = sessions.get(id);
+            if (snapshot) {
+              void finalizeAgentName({
+                sessions,
+                sessionId: id,
+                agentId: snapshot.agentId,
+                project: snapshot.project,
+                cwd: snapshot.cwd,
+                prompt,
+                assistantSnippet: snapshot.lastAssistantSnippet,
+              });
+            }
+          }
         }
       } catch (err) {
         sessions.clearActiveRun(id, "error");
         if (!res.writableEnded) {
-          writeSseEvent(res, "error", id, {
-            message: err.message ?? "Run failed",
-            code: "RUN_FAILED",
-          });
+          sessions.publishEvent(
+            id,
+            createSseEvent("error", id, {
+              message: err.message ?? "Run failed",
+              code: "RUN_FAILED",
+            }),
+            res,
+          );
         }
       } finally {
         if (!res.writableEnded) {

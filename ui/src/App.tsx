@@ -99,6 +99,11 @@ export default function App() {
     }
   }, [projectsLoading, session, project, selectedModel, resumeAgent]);
 
+  useEffect(() => {
+    if (!session?.name) return;
+    void refreshAgents();
+  }, [session?.name, refreshAgents]);
+
   const handleNewSession = useCallback(async () => {
     try {
       await startSession(project, selectedModel);
@@ -202,6 +207,7 @@ export default function App() {
           agents={agents}
           agentsLoading={agentsLoading}
           deletingId={deletingId}
+          activeAgentId={session?.agentId}
           onResumeAgent={(id) => void handleResumeAgent(id)}
           onDeleteAgent={(id) => void handleDeleteAgent(id)}
           className={
