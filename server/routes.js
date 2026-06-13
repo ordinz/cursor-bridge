@@ -15,8 +15,6 @@ import {
   listProjects,
   resolveProject,
   ProjectError,
-  PROJECTS_ROOT,
-  ENABLED_PROJECT_IDS,
 } from "./projects.js";
 import { writeSseEvent } from "./sse-events.js";
 import { setupSse, streamRun } from "./stream.js";
@@ -62,14 +60,10 @@ export function createRouter(sessions) {
 
   router.get("/projects", (_req, res) => {
     res.json({
-      root: PROJECTS_ROOT,
-      enabledProjectIds: ENABLED_PROJECT_IDS,
       projects: listProjects().map((p) => ({
         id: p.id,
         name: p.name,
-        path: p.path,
-        enabled: p.enabled,
-        canCreateSession: p.enabled,
+        canCreateSession: true,
       })),
     });
   });

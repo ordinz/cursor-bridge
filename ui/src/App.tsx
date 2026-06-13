@@ -17,7 +17,7 @@ import { useModels } from "./hooks/useModels";
 import { useProjects } from "./hooks/useProjects";
 
 export default function App() {
-  const { projects, root, loading: projectsLoading } = useProjects();
+  const { projects, loading: projectsLoading } = useProjects();
   const { models, selectedModel, selectModel, loading: modelsLoading } =
     useModels();
   const [project, setProject] = useState("app");
@@ -51,7 +51,7 @@ export default function App() {
   const toolCount = feed.filter((i) => i.kind === "tool").length;
 
   useEffect(() => {
-    const enabled = projects.filter((p) => p.enabled);
+    const enabled = projects.filter((p) => p.canCreateSession !== false);
     if (!enabled.length) return;
     if (!enabled.some((p) => p.id === project)) {
       setProject(enabled[0].id);
@@ -234,7 +234,6 @@ export default function App() {
       <StatusBar
         session={session}
         runStatus={runStatus}
-        projectsRoot={root}
         apiOk={apiOk}
         cursorReady={cursorReady}
         bridgeVersion={health?.version}

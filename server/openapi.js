@@ -115,11 +115,6 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
                   schema: {
                     type: "object",
                     properties: {
-                      root: { type: "string" },
-                      enabledProjectIds: {
-                        type: "array",
-                        items: { type: "string" },
-                      },
                       projects: {
                         type: "array",
                         items: {
@@ -127,8 +122,6 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
                           properties: {
                             id: { type: "string" },
                             name: { type: "string" },
-                            path: { type: "string" },
-                            enabled: { type: "boolean" },
                             canCreateSession: { type: "boolean" },
                           },
                         },

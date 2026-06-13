@@ -196,6 +196,21 @@ test("SSE cancel emits status and done once", async () => {
   assert.equal(events.at(-1).status, "cancelled");
 });
 
+test("GET /projects returns only allowlisted projects without paths", async () => {
+  await withTestServer(async ({ base }) => {
+    const res = await fetch(`${base}/projects`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(Array.isArray(body.projects));
+    assert.ok(!("root" in body));
+    assert.ok(!("enabledProjectIds" in body));
+    for (const p of body.projects) {
+      assert.ok(!("path" in p));
+      assert.equal(p.canCreateSession, true);
+    }
+  });
+});
+
 test("openapi.json describes core routes", async () => {
   await withTestServer(async ({ base }) => {
     const res = await fetch(`${base}/openapi.json`);

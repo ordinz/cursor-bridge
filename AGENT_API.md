@@ -59,23 +59,18 @@ Wait until `cursor.ready === true` before creating sessions.
 
 ### `GET /api/projects`
 
+Returns only the enabled allowlist (`www`, `app` by default). Other directories under the workspace root are not exposed.
+
 ```json
 {
-  "root": "/Users/you/dev/mx/https",
-  "enabledProjectIds": ["www", "app"],
   "projects": [
-    {
-      "id": "app",
-      "name": "app",
-      "path": "/Users/you/dev/mx/https/app",
-      "enabled": true,
-      "canCreateSession": true
-    }
+    { "id": "www", "name": "www", "canCreateSession": true },
+    { "id": "app", "name": "app", "canCreateSession": true }
   ]
 }
 ```
 
-Only projects with `canCreateSession: true` accept new sessions.
+Configure allowlist via `ENABLED_PROJECTS` (default `www,app`).
 
 ---
 

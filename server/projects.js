@@ -23,34 +23,24 @@ export function isProjectEnabled(projectId) {
   return ENABLED_PROJECT_IDS.includes(projectId);
 }
 
+/** Only enabled allowlist entries that exist on disk. */
 export function listProjects() {
   if (!fs.existsSync(PROJECTS_ROOT)) {
     return [];
   }
 
-  const projects = fs
-    .readdirSync(PROJECTS_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => {
-      const resolved = path.resolve(PROJECTS_ROOT, entry.name);
-      const enabled = isProjectEnabled(entry.name);
-      return {
-        id: entry.name,
-        name: entry.name,
-        path: resolved,
-        enabled,
-      };
-    });
-
-  return projects.sort((a, b) => {
-    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-    const aIdx = ENABLED_PROJECT_IDS.indexOf(a.id);
-    const bIdx = ENABLED_PROJECT_IDS.indexOf(b.id);
-    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-    if (aIdx !== -1) return -1;
-    if (bIdx !== -1) return 1;
-    return a.id.localeCompare(b.id);
-  });
+  return ENABLED_PROJECT_IDS.map((id) => {
+    const resolved = path.resolve(PROJECTS_ROOT, id);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+      return null;
+    }
+    return {
+      id,
+      name: id,
+      path: resolved,
+      enabled: true,
+    };
+  }).filter(Boolean);
 }
 
 export function resolveProject(projectId, { requireEnabled = true } = {}) {
@@ -62,18 +52,7 @@ export function resolveProject(projectId, { requireEnabled = true } = {}) {
     throw new ProjectError("invalid project id", 400);
   }
 
-  const resolved = path.resolve(PROJECTS_ROOT, projectId);
-
-  if (!isWithinRoot(resolved)) {
-    throw new ProjectError("project outside allowlist", 400);
-  }
-
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    throw new ProjectError(`unknown project: ${projectId}`, 400);
-  }
-
-  const allowed = listProjects();
-  if (!allowed.some((p) => p.id === projectId)) {
+  if (!ENABLED_PROJECT_IDS.includes(projectId)) {
     throw new ProjectError(`unknown project: ${projectId}`, 400);
   }
 
@@ -83,6 +62,16 @@ export function resolveProject(projectId, { requireEnabled = true } = {}) {
       403,
       "PROJECT_DISABLED",
     );
+  }
+
+  const resolved = path.resolve(PROJECTS_ROOT, projectId);
+
+  if (!isWithinRoot(resolved)) {
+    throw new ProjectError("project outside allowlist", 400);
+  }
+
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new ProjectError(`unknown project: ${projectId}`, 400);
   }
 
   return resolved;

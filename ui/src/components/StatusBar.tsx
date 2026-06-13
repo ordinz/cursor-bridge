@@ -3,7 +3,6 @@ import type { Session } from "../lib/types";
 interface StatusBarProps {
   session: Session | null;
   runStatus: string;
-  projectsRoot: string;
   apiOk: boolean;
   cursorReady: boolean;
   bridgeVersion?: string;
@@ -12,7 +11,6 @@ interface StatusBarProps {
 export function StatusBar({
   session,
   runStatus,
-  projectsRoot,
   apiOk,
   cursorReady,
   bridgeVersion,
@@ -41,11 +39,6 @@ export function StatusBar({
         </>
       )}
       <span data-testid="status-run">run={runStatus}</span>
-      {projectsRoot && (
-        <span className="truncate" data-testid="status-root">
-          root={projectsRoot}
-        </span>
-      )}
     </footer>
   );
 }

@@ -18,14 +18,12 @@ export interface HealthResponse {
 export interface Project {
   id: string;
   name: string;
-  path: string;
-  enabled: boolean;
+  path?: string;
+  enabled?: boolean;
   canCreateSession: boolean;
 }
 
 export interface ProjectsResponse {
-  root: string;
-  enabledProjectIds: string[];
   projects: Project[];
 }
 

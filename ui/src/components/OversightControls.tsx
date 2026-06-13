@@ -72,9 +72,8 @@ export function OversightControls({
           data-testid="project-select"
         >
           {projects.map((p) => (
-            <option key={p.id} value={p.id} disabled={!p.enabled}>
+            <option key={p.id} value={p.id}>
               {p.name}
-              {!p.enabled ? " (disabled)" : ""}
             </option>
           ))}
         </select>
