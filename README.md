@@ -49,6 +49,18 @@ See **[AGENT_API.md](./AGENT_API.md)** for the machine-oriented client contract 
 - OpenAPI: `GET /api/openapi.json`
 - Browser demo: `examples/browser-client.html` (served at `/examples/browser-client.html` in prod mode)
 
+## MCP server
+
+For **Perplexity Computer**, **Claude Desktop**, **Cursor**, and other MCP clients, use the local stdio MCP package instead of calling HTTP directly:
+
+```bash
+pnpm install && pnpm mcp:build
+```
+
+See **[mcp/README.md](./mcp/README.md)** for Perplexity/Claude/Cursor registration and tool reference.
+
+MCP is the **preferred** integration path for browser-based agents and desktop MCP hosts. Custom browser clients that need full control over SSE streaming should use the HTTP+SSE API in [AGENT_API.md](./AGENT_API.md).
+
 ## Project scope
 
 Agents may only work inside **`~/dev/mx/https`**. By default only **`www`** and **`app`** are enabled for new sessions; other subdirectories appear in the list but are disabled.

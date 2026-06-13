@@ -8,6 +8,8 @@
     "start": "node scripts/run.mjs",
     "build": "pnpm --filter ui build",
     "bridge": "node bridge.mjs",
+    "mcp:build": "pnpm --filter @cursor-bridge/mcp build",
+    "mcp:dev": "pnpm --filter @cursor-bridge/mcp dev",
     "test": "node --test server/*.test.js"
   },
   "keywords": [],
