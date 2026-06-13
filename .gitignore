@@ -8,6 +8,7 @@ node_modules/
 
 # Build output
 ui/dist/
+mcp/dist/
 
 # Lockfile fallbacks (project uses pnpm)
 package-lock.json
