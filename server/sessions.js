@@ -3,8 +3,14 @@ import { Agent } from "@cursor/sdk";
 import { resolveProject, ProjectError } from "./projects.js";
 import { buildAgentName } from "./agent-names.js";
 import { getLocalAgentMeta } from "./agents.js";
+import {
+  NoActiveRunError,
+  SessionBusyError,
+  SessionNotFoundError,
+} from "./errors.js";
 
 const IDLE_TIMEOUT_MS = Number(process.env.SESSION_IDLE_MS ?? 30 * 60 * 1000);
+const SNIPPET_MAX = 160;
 
 export class SessionManager {
   constructor() {
@@ -24,10 +30,43 @@ export class SessionManager {
     return [...this.sessions.values()].map(toPublicSession);
   }
 
+  getDetail(sessionId) {
+    const record = this.get(sessionId);
+    if (!record) return null;
+    return toSessionDetail(record);
+  }
+
+  /** @throws {SessionNotFoundError} */
+  require(sessionId) {
+    const record = this.get(sessionId);
+    if (!record) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    return record;
+  }
+
+  isRunActive(sessionId) {
+    const record = this.get(sessionId);
+    return Boolean(record?.runStatus === "running" && record.activeRun);
+  }
+
+  /** @throws {SessionNotFoundError | SessionBusyError} */
+  assertCanChat(sessionId) {
+    const record = this.get(sessionId);
+    if (!record) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    if (record.runStatus === "running") {
+      throw new SessionBusyError(sessionId);
+    }
+    return record;
+  }
+
   async create({ project, model = "default" }) {
     const cwd = resolveProject(project);
     const sessionId = this.createId();
     const name = buildAgentName({ project, model });
+    const now = Date.now();
 
     const agent = await Agent.create({
       apiKey: process.env.CURSOR_API_KEY,
@@ -46,13 +85,17 @@ export class SessionManager {
       name,
       namedFromPrompt: false,
       activeRun: null,
+      abortController: null,
       runStatus: "idle",
-      lastActivityAt: Date.now(),
+      createdAt: now,
+      lastActivityAt: now,
+      lastPrompt: null,
+      lastAssistantSnippet: null,
     };
 
     this.sessions.set(sessionId, record);
     this.scheduleIdleCleanup(sessionId);
-    return toPublicSession(record);
+    return toSessionDetail(record);
   }
 
   async resumeAgent({ agentId, project, model = "default" }) {
@@ -62,6 +105,7 @@ export class SessionManager {
       agentId,
       project,
     );
+    const now = Date.now();
 
     const agent = await Agent.resume(agentId, {
       apiKey: process.env.CURSOR_API_KEY,
@@ -79,13 +123,17 @@ export class SessionManager {
       name: storedName ?? buildAgentName({ project, model }),
       namedFromPrompt,
       activeRun: null,
+      abortController: null,
       runStatus: "idle",
-      lastActivityAt: Date.now(),
+      createdAt: now,
+      lastActivityAt: now,
+      lastPrompt: null,
+      lastAssistantSnippet: null,
     };
 
     this.sessions.set(sessionId, record);
     this.scheduleIdleCleanup(sessionId);
-    return toPublicSession(record);
+    return toSessionDetail(record);
   }
 
   markNamedFromPrompt(sessionId, name) {
@@ -93,12 +141,32 @@ export class SessionManager {
     if (!record) return;
     record.name = name;
     record.namedFromPrompt = true;
+    record.lastActivityAt = Date.now();
   }
 
-  setActiveRun(sessionId, run) {
+  notePrompt(sessionId, prompt) {
+    const record = this.get(sessionId);
+    if (!record) return;
+    record.lastPrompt = prompt;
+    record.lastActivityAt = Date.now();
+  }
+
+  noteAssistantText(sessionId, text) {
+    const record = this.get(sessionId);
+    if (!record || !text) return;
+    const combined = `${record.lastAssistantSnippet ?? ""}${text}`;
+    record.lastAssistantSnippet =
+      combined.length > SNIPPET_MAX
+        ? `${combined.slice(-SNIPPET_MAX)}`
+        : combined;
+    record.lastActivityAt = Date.now();
+  }
+
+  setActiveRun(sessionId, run, abortController = null) {
     const record = this.get(sessionId);
     if (!record) return;
     record.activeRun = run;
+    record.abortController = abortController;
     record.runStatus = "running";
     record.lastActivityAt = Date.now();
   }
@@ -107,6 +175,7 @@ export class SessionManager {
     const record = this.get(sessionId);
     if (!record) return;
     record.activeRun = null;
+    record.abortController = null;
     record.runStatus = status;
     record.lastActivityAt = Date.now();
   }
@@ -118,17 +187,22 @@ export class SessionManager {
     }
   }
 
+  /** @throws {SessionNotFoundError | NoActiveRunError} */
   async cancel(sessionId) {
-    const record = this.get(sessionId);
-    if (!record) return false;
+    const record = this.require(sessionId);
 
-    if (record.activeRun?.supports("cancel")) {
-      await record.activeRun.cancel();
-      this.clearActiveRun(sessionId, "cancelled");
-      return true;
+    if (!record.activeRun) {
+      throw new NoActiveRunError(sessionId);
     }
 
-    return false;
+    record.abortController?.abort();
+
+    if (record.activeRun.supports?.("cancel")) {
+      await record.activeRun.cancel();
+    }
+
+    this.clearActiveRun(sessionId, "cancelled");
+    return { sessionId, runStatus: "cancelled" };
   }
 
   async close(sessionId) {
@@ -180,6 +254,18 @@ function toPublicSession(record) {
     model: record.model,
     name: record.name,
     runStatus: record.runStatus,
+    runActive: Boolean(record.activeRun),
+    createdAt: record.createdAt,
+    lastActivityAt: record.lastActivityAt,
+    lastPrompt: record.lastPrompt,
+    lastAssistantSnippet: record.lastAssistantSnippet,
+  };
+}
+
+function toSessionDetail(record) {
+  return {
+    ...toPublicSession(record),
+    namedFromPrompt: record.namedFromPrompt,
   };
 }
 

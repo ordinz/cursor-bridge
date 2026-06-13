@@ -5,6 +5,8 @@ interface StatusBarProps {
   runStatus: string;
   projectsRoot: string;
   apiOk: boolean;
+  cursorReady: boolean;
+  bridgeVersion?: string;
 }
 
 export function StatusBar({
@@ -12,6 +14,8 @@ export function StatusBar({
   runStatus,
   projectsRoot,
   apiOk,
+  cursorReady,
+  bridgeVersion,
 }: StatusBarProps) {
   return (
     <footer
@@ -20,8 +24,14 @@ export function StatusBar({
     >
       <span data-testid="status-port">localhost:4242</span>
       <span className={apiOk ? "text-emerald-600" : "text-red-500"}>
-        {apiOk ? "api ok" : "api down"}
+        {apiOk ? "bridge ok" : "bridge down"}
       </span>
+      <span className={cursorReady ? "text-emerald-600" : "text-amber-500"}>
+        {cursorReady ? "cursor ready" : "cursor not ready"}
+      </span>
+      {bridgeVersion && (
+        <span data-testid="status-version">v{bridgeVersion}</span>
+      )}
       {session && (
         <>
           <span data-testid="status-session">session={session.sessionId}</span>

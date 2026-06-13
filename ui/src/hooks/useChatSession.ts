@@ -3,6 +3,7 @@ import {
   cancelSession,
   createSession,
   getAgentHistory,
+  getSession,
   resumeSession,
 } from "../lib/api";
 import { postChat, readSseStream } from "../lib/sse";
@@ -24,9 +25,12 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
         id: nextId(),
         kind: "user",
         text: event.text,
-        source: event.source === "manual" || event.source === "api" || event.source === "history"
-          ? event.source
-          : undefined,
+        source:
+          event.source === "manual" ||
+          event.source === "api" ||
+          event.source === "history"
+            ? event.source
+            : undefined,
       });
       break;
     case "assistant": {
@@ -51,12 +55,31 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
         kind: "tool",
         callId,
         name: event.name,
-        status: event.status,
+        status: event.status === "running" ? "running" : "completed",
         args: event.args,
+      };
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...toolItem };
+      } else {
+        next.push(toolItem);
+      }
+      break;
+    }
+    case "tool_result": {
+      const callId = event.callId ?? nextId();
+      const idx = next.findIndex(
+        (i) => i.kind === "tool" && i.callId === callId,
+      );
+      const toolItem: FeedItem = {
+        id: callId,
+        kind: "tool",
+        callId,
+        name: event.name,
+        status: event.status === "error" ? "error" : "completed",
         result: event.result,
       };
       if (idx >= 0) {
-        next[idx] = toolItem;
+        next[idx] = { ...next[idx], ...toolItem };
       } else {
         next.push(toolItem);
       }
@@ -99,6 +122,25 @@ export function useChatSession() {
       }),
     );
   }, [session]);
+
+  useEffect(() => {
+    if (!session?.sessionId) return;
+    if (runStatus === "running") return;
+
+    const id = session.sessionId;
+    const interval = window.setInterval(() => {
+      void getSession(id)
+        .then((s) => {
+          setSession((prev) => (prev?.sessionId === id ? s : prev));
+          setRunStatus((prev) =>
+            prev === "running" ? prev : (s.runStatus as string),
+          );
+        })
+        .catch(() => undefined);
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, [session?.sessionId, runStatus]);
 
   const startSession = useCallback(
     async (project: string, model: string) => {
@@ -148,9 +190,18 @@ export function useChatSession() {
 
       setError(null);
       setRunStatus("running");
-      setFeed((items) =>
-        applyEvent(items, { type: "user", text: prompt, source }),
-      );
+      setFeed((items) => [
+        ...items,
+        {
+          id: nextId(),
+          kind: "user",
+          text: prompt,
+          source:
+            source === "manual" || source === "api" || source === "history"
+              ? source
+              : undefined,
+        },
+      ]);
 
       abortRef.current?.abort();
       abortRef.current = new AbortController();
@@ -164,14 +215,29 @@ export function useChatSession() {
               prev
                 ? {
                     ...prev,
-                    sessionId: event.sessionId,
+                    sessionId: event.sessionId ?? prev.sessionId,
                     agentId: event.agentId,
                     name: event.name ?? prev.name,
+                    runStatus: event.runStatus ?? prev.runStatus,
+                    runActive: event.runActive ?? prev.runActive,
+                    lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
                   }
                 : prev,
             );
           } else if (event.type === "done") {
-            setRunStatus(event.status === "finished" ? "idle" : event.status);
+            const status =
+              event.status === "finished" ? "idle" : event.status;
+            setRunStatus(status);
+            setSession((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    runStatus: status,
+                    runActive: false,
+                    lastActivityAt: Date.parse(event.timestamp) || prev.lastActivityAt,
+                  }
+                : prev,
+            );
           } else {
             setFeed((items) => applyEvent(items, event));
           }
@@ -180,10 +246,14 @@ export function useChatSession() {
       } catch (err) {
         const message = err instanceof Error ? err.message : "Chat failed";
         setError(message);
-        setFeed((items) =>
-          applyEvent(items, { type: "error", message }),
-        );
+        setFeed((items) => [
+          ...items,
+          { id: nextId(), kind: "error", message },
+        ]);
         setRunStatus("error");
+        setSession((prev) =>
+          prev ? { ...prev, runStatus: "error", runActive: false } : prev,
+        );
       }
     },
     [session],

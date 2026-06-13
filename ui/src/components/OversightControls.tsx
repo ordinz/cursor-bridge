@@ -100,8 +100,40 @@ export function OversightControls({
       </div>
 
       {session && (
-        <div className="mt-2 truncate text-xs text-zinc-600">
-          {session.sessionId.slice(0, 8)}… · {session.model} · {runStatus}
+        <div className="mt-2 space-y-1 text-xs text-zinc-600">
+          <div className="truncate">
+            {session.name ?? session.sessionId.slice(0, 8)}… · {session.model}{" "}
+            ·{" "}
+            <span
+              className={
+                runStatus === "running"
+                  ? "text-amber-400"
+                  : runStatus === "error"
+                    ? "text-red-400"
+                    : "text-zinc-500"
+              }
+            >
+              {runStatus}
+            </span>
+          </div>
+          {session.lastPrompt && (
+            <div className="truncate" title={session.lastPrompt}>
+              Last prompt: {session.lastPrompt}
+            </div>
+          )}
+          {session.lastAssistantSnippet && (
+            <div className="truncate" title={session.lastAssistantSnippet}>
+              Assistant: {session.lastAssistantSnippet}
+            </div>
+          )}
+          <div className="text-[10px] text-zinc-700">
+            Updated{" "}
+            {new Date(session.lastActivityAt).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })}
+          </div>
         </div>
       )}
     </header>

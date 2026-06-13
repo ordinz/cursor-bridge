@@ -19,9 +19,11 @@ app.use(express.json());
 
 app.use("/api", createRouter(sessions));
 
-app.post("/prompt", (req, res) => handleLegacyPrompt(req, res, sessions));
+app.post("/prompt", (req, res) => handleLegacyPrompt(req, res));
 
 const uiDist = path.join(__dirname, "ui", "dist");
+const examplesDir = path.join(__dirname, "examples");
+app.use("/examples", express.static(examplesDir));
 app.use(express.static(uiDist));
 app.get(/^(?!\/api).*/, (_req, res) => {
   res.sendFile(path.join(uiDist, "index.html"), (err) => {

@@ -78,16 +78,21 @@ export function resolveProject(projectId, { requireEnabled = true } = {}) {
   }
 
   if (requireEnabled && !isProjectEnabled(projectId)) {
-    throw new ProjectError(`project is disabled: ${projectId}`, 403);
+    throw new ProjectError(
+      `project is disabled: ${projectId}`,
+      403,
+      "PROJECT_DISABLED",
+    );
   }
 
   return resolved;
 }
 
 export class ProjectError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code = "UNKNOWN_PROJECT") {
     super(message);
     this.name = "ProjectError";
     this.status = status;
+    this.code = code;
   }
 }

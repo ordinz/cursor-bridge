@@ -1,24 +1,46 @@
-import type { AgentInfo, FeedItem, Model, Project, Session } from "./types";
+import type {
+  AgentInfo,
+  ApiErrorBody,
+  FeedItem,
+  HealthResponse,
+  Model,
+  ProjectsResponse,
+  Session,
+} from "./types";
+
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  sessionId?: string;
+
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.error);
+    this.name = "ApiError";
+    this.code = body.code;
+    this.status = status;
+    this.sessionId = body.sessionId;
+  }
+}
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? res.statusText);
+    const body = (await res.json().catch(() => ({}))) as ApiErrorBody;
+    throw new ApiError(res.status, {
+      error: body.error ?? res.statusText,
+      code: body.code ?? "REQUEST_FAILED",
+      sessionId: body.sessionId,
+    });
   }
   return res.json();
 }
 
 export async function getHealth() {
-  return json<{ ok: boolean; apiKeyConfigured: boolean }>("/api/health");
+  return json<HealthResponse>("/api/health");
 }
 
 export async function getProjects() {
-  return json<{
-    projects: Project[];
-    root: string;
-    enabledProjects: string[];
-  }>("/api/projects");
+  return json<ProjectsResponse>("/api/projects");
 }
 
 export async function getModels() {
@@ -48,6 +70,10 @@ export async function getSessions() {
   return json<{ sessions: Session[] }>("/api/sessions");
 }
 
+export async function getSession(sessionId: string) {
+  return json<Session>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
 export async function createSession(project: string, model: string) {
   return json<Session>("/api/sessions", {
     method: "POST",
@@ -69,9 +95,10 @@ export async function resumeSession(
 }
 
 export async function cancelSession(sessionId: string) {
-  return json<{ ok: boolean }>(`/api/sessions/${sessionId}/cancel`, {
-    method: "POST",
-  });
+  return json<{ ok: boolean; sessionId: string; runStatus: string }>(
+    `/api/sessions/${sessionId}/cancel`,
+    { method: "POST" },
+  );
 }
 
 export async function closeSession(sessionId: string) {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getHealth } from "./lib/api";
+import type { HealthResponse } from "./lib/types";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ManualOverride } from "./components/ManualOverride";
 import {
@@ -20,8 +21,11 @@ export default function App() {
   const { models, selectedModel, selectModel, loading: modelsLoading } =
     useModels();
   const [project, setProject] = useState("app");
-  const [apiOk, setApiOk] = useState(false);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("feed");
+
+  const apiOk = health?.ok ?? false;
+  const cursorReady = health?.cursor.ready ?? false;
 
   const {
     agents,
@@ -56,8 +60,14 @@ export default function App() {
 
   useEffect(() => {
     void getHealth()
-      .then(() => setApiOk(true))
-      .catch(() => setApiOk(false));
+      .then(setHealth)
+      .catch(() => setHealth(null));
+    const interval = window.setInterval(() => {
+      void getHealth()
+        .then(setHealth)
+        .catch(() => setHealth(null));
+    }, 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -166,7 +176,7 @@ export default function App() {
         </div>
       )}
       <ActivityFeed items={feed} running={running} />
-      <ManualOverride disabled={!apiOk || running} onSend={handleManualSend} />
+      <ManualOverride disabled={!apiOk || !cursorReady || running} onSend={handleManualSend} />
     </>
   );
 
@@ -226,6 +236,8 @@ export default function App() {
         runStatus={runStatus}
         projectsRoot={root}
         apiOk={apiOk}
+        cursorReady={cursorReady}
+        bridgeVersion={health?.version}
       />
 
       <MobileTabBar

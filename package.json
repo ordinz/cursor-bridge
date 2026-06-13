@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node scripts/run.mjs",
     "build": "pnpm --filter ui build",
-    "bridge": "node bridge.mjs"
+    "bridge": "node bridge.mjs",
+    "test": "node --test server/*.test.js"
   },
   "keywords": [],
   "author": "",

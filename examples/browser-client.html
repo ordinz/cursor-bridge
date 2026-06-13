@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cursor-bridge browser client</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      body {
+        margin: 0;
+        padding: 1rem;
+        background: #0a0a0a;
+        color: #e4e4e7;
+      }
+      label {
+        display: block;
+        font-size: 0.75rem;
+        color: #71717a;
+        margin-bottom: 0.25rem;
+      }
+      input,
+      textarea,
+      button,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 0.75rem;
+        padding: 0.5rem;
+        border-radius: 6px;
+        border: 1px solid #3f3f46;
+        background: #18181b;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+        background: #27272a;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #log {
+        white-space: pre-wrap;
+        background: #111;
+        border: 1px solid #27272a;
+        border-radius: 8px;
+        padding: 0.75rem;
+        min-height: 12rem;
+        max-height: 50vh;
+        overflow: auto;
+        font-size: 0.8rem;
+      }
+      .ok {
+        color: #34d399;
+      }
+      .err {
+        color: #f87171;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>cursor-bridge browser client</h1>
+    <p>
+      Minimal example for Comet / Perplexity-style agents. Open via
+      <code>http://127.0.0.1:4242/examples/browser-client.html</code> (prod) or
+      serve this file while the bridge runs on :4242.
+    </p>
+
+    <label for="base">API base</label>
+    <input id="base" value="http://127.0.0.1:4242/api" />
+
+    <label for="project">Project</label>
+    <input id="project" value="app" />
+
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" rows="3">Say hello in one short sentence.</textarea>
+
+    <button id="run">Create session &amp; stream chat</button>
+    <button id="cancel" disabled>Cancel active run</button>
+
+    <div id="log"></div>
+
+    <script>
+      const logEl = document.getElementById("log");
+      const runBtn = document.getElementById("run");
+      const cancelBtn = document.getElementById("cancel");
+
+      let sessionId = null;
+      let assistant = "";
+
+      function log(line, cls) {
+        const span = document.createElement("span");
+        if (cls) span.className = cls;
+        span.textContent = line + "\n";
+        logEl.appendChild(span);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      async function api(path, init) {
+        const base = document.getElementById("base").value.replace(/\/$/, "");
+        const res = await fetch(base + path, init);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.code + ": " + (err.error || res.statusText));
+        }
+        return res;
+      }
+
+      async function consumeSse(res) {
+        assistant = "";
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const part of parts) {
+            if (part.startsWith(":")) continue; // heartbeat comment
+            for (const line of part.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              const event = JSON.parse(line.slice(6));
+              if (event.type === "assistant") {
+                assistant += event.text;
+                log("[assistant delta] " + JSON.stringify(event.text));
+              } else if (event.type === "done") {
+                log("[done] status=" + event.status, "ok");
+                log("Full assistant reply:\n" + assistant, "ok");
+              } else if (event.type === "error") {
+                log("[error] " + event.message, "err");
+              } else {
+                log("[" + event.type + "] " + JSON.stringify(event));
+              }
+            }
+          }
+        }
+      }
+
+      runBtn.onclick = async () => {
+        logEl.textContent = "";
+        runBtn.disabled = true;
+        cancelBtn.disabled = false;
+        try {
+          const health = await (await api("/health")).json();
+          log("health cursor.ready=" + health.cursor.ready);
+          if (!health.cursor.ready) throw new Error("Cursor not ready");
+
+          const project = document.getElementById("project").value;
+          const created = await (
+            await api("/sessions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ project, model: "default" }),
+            })
+          ).json();
+          sessionId = created.sessionId;
+          log("sessionId=" + sessionId);
+
+          const prompt = document.getElementById("prompt").value;
+          const chatRes = await api("/sessions/" + sessionId + "/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt }),
+          });
+          await consumeSse(chatRes);
+        } catch (e) {
+          log(String(e.message || e), "err");
+        } finally {
+          runBtn.disabled = false;
+          cancelBtn.disabled = !sessionId;
+        }
+      };
+
+      cancelBtn.onclick = async () => {
+        if (!sessionId) return;
+        try {
+          const body = await (
+            await api("/sessions/" + sessionId + "/cancel", { method: "POST" })
+          ).json();
+          log("cancelled runStatus=" + body.runStatus, "ok");
+        } catch (e) {
+          log(String(e.message || e), "err");
+        }
+      };
+    </script>
+  </body>
+</html>

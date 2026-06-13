@@ -1,4 +1,5 @@
-import type { SseEvent } from "./types";
+import { ApiError } from "./api";
+import type { ApiErrorBody, SseEvent } from "./types";
 
 export async function* readSseStream(
   response: Response,
@@ -42,8 +43,12 @@ export async function postChat(
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? res.statusText);
+    const body = (await res.json().catch(() => ({}))) as ApiErrorBody;
+    throw new ApiError(res.status, {
+      error: body.error ?? res.statusText,
+      code: body.code ?? "CHAT_FAILED",
+      sessionId: body.sessionId ?? sessionId,
+    });
   }
 
   return res;

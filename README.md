@@ -44,6 +44,11 @@ pnpm bridge
 
 Agents should always target `http://127.0.0.1:4242/api/*`.
 
+See **[AGENT_API.md](./AGENT_API.md)** for the machine-oriented client contract (SSE schema, error codes, browser examples).
+
+- OpenAPI: `GET /api/openapi.json`
+- Browser demo: `examples/browser-client.html` (served at `/examples/browser-client.html` in prod mode)
+
 ## Project scope
 
 Agents may only work inside **`~/dev/mx/https`**. By default only **`www`** and **`app`** are enabled for new sessions; other subdirectories appear in the list but are disabled.
