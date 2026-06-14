@@ -1,56 +1,44 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { loadRootEnv } from "./env.js";
 import { BridgeClient, assertLocalBaseUrl } from "./client.js";
-import { registerTools } from "./tools.js";
+import { startMcpHttpServer } from "./http-server.js";
+
+loadRootEnv();
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:4242/api";
 const baseUrl = process.env.BRIDGE_BASE_URL ?? DEFAULT_BASE_URL;
-
-function logStderr(message: string): void {
-  process.stderr.write(`${message}\n`);
-}
+const bridgeApiKey =
+  process.env.BRIDGE_API_KEY?.trim() ||
+  process.env.MCP_API_KEY?.trim() ||
+  undefined;
 
 async function main(): Promise<void> {
   assertLocalBaseUrl(baseUrl);
 
-  const client = new BridgeClient(baseUrl);
+  const bridgeClient = new BridgeClient(baseUrl, bridgeApiKey);
 
   try {
-    const health = await client.health();
+    const health = await bridgeClient.health();
     if (health.cursor.ready) {
-      logStderr(
-        `cursor-bridge MCP ready (bridge v${health.version}, Cursor ready)`,
+      console.log(
+        `Bridge reachable (v${health.version}, Cursor ready) at ${baseUrl}`,
       );
     } else {
-      const reason = health.cursor.reason ?? "unknown";
-      logStderr(
-        `cursor-bridge MCP started but Cursor is not ready: ${reason}`,
+      console.warn(
+        `Bridge reachable but Cursor not ready: ${health.cursor.reason ?? "unknown"}`,
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logStderr(
-      `cursor-bridge MCP started but health check failed: ${message}`,
-    );
-    logStderr(
-      "Ensure the bridge is running: pnpm start (http://127.0.0.1:4242/api)",
-    );
+    console.warn(`Bridge health check failed: ${message}`);
+    console.warn("Start the bridge first: pnpm bridge");
   }
 
-  const server = new McpServer({
-    name: "cursor-bridge",
-    version: "1.0.0",
-  });
-
-  registerTools(server, client);
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  startMcpHttpServer({ bridgeClient });
 }
 
 main().catch((err) => {
-  logStderr(err instanceof Error ? err.message : String(err));
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

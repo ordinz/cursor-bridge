@@ -51,15 +51,17 @@ See **[AGENT_API.md](./AGENT_API.md)** for the machine-oriented client contract 
 
 ## MCP server
 
-For **Perplexity Computer**, **Claude Desktop**, **Cursor**, and other MCP clients, use the local stdio MCP package instead of calling HTTP directly:
+HTTP MCP server for **Perplexity Custom connector**, Cloudflare tunnel, and other remote MCP clients:
 
 ```bash
 pnpm install && pnpm mcp:build
+pnpm bridge      # :4242 REST API
+pnpm mcp:start   # :4243 Streamable HTTP + SSE MCP
 ```
 
-See **[mcp/README.md](./mcp/README.md)** for Perplexity/Claude/Cursor registration and tool reference.
+See **[mcp/README.md](./mcp/README.md)** for tunnel setup, `MCP_API_KEY`, and Perplexity registration.
 
-MCP is the **preferred** integration path for browser-based agents and desktop MCP hosts. Custom browser clients that need full control over SSE streaming should use the HTTP+SSE API in [AGENT_API.md](./AGENT_API.md).
+For **Cursor / Claude Desktop** (local stdio), use the REST API in [AGENT_API.md](./AGENT_API.md) or run the MCP HTTP server locally at `http://127.0.0.1:4243/mcp`.
 
 ## Project scope
 
@@ -146,4 +148,6 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 
 ## Security
 
-Localhost-only. Do not expose publicly — the bridge runs Cursor agents with filesystem access using your API key.
+Localhost-only bind by default. Do not expose publicly without `MCP_API_KEY` — the bridge runs Cursor agents with filesystem access using your API key.
+
+**Remote access (tunnel hostname):** all routes require `Authorization: Bearer <MCP_API_KEY>` (or `X-API-Key`). **Localhost stays open** for local dev (`pnpm start`, UI, MCP on `:4243`). The oversight UI is never served on tunnel hostnames.

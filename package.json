@@ -10,6 +10,7 @@
     "bridge": "node bridge.mjs",
     "mcp:build": "pnpm --filter @cursor-bridge/mcp build",
     "mcp:dev": "pnpm --filter @cursor-bridge/mcp dev",
+    "mcp:start": "pnpm --filter @cursor-bridge/mcp start",
     "test": "node --test server/*.test.js"
   },
   "keywords": [],
