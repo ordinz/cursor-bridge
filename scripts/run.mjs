@@ -1,11 +1,17 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const prod = process.argv.includes("--prod");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const mcpEntry = join(root, "mcp/dist/index.js");
 
 function run(command, args) {
   return spawn(command, args, {
     stdio: "inherit",
     env: process.env,
+    cwd: root,
   });
 }
 
@@ -18,34 +24,46 @@ function wait(proc) {
   });
 }
 
-if (prod) {
-  console.log("cursor-bridge: prod mode — build UI, serve on http://127.0.0.1:4242");
-  await wait(run("pnpm", ["--filter", "ui", "build"]));
-  const bridge = run("node", ["bridge.mjs"]);
-  bridge.on("exit", (code) => process.exit(code ?? 0));
-} else {
-  console.log("cursor-bridge: dev mode");
-  console.log("  API  → http://127.0.0.1:4242/api/*");
-  console.log("  UI   → http://localhost:5173 (HMR)");
-  console.log("  prod → pnpm start -- --prod\n");
+async function ensureMcpBuilt() {
+  if (existsSync(mcpEntry)) return;
+  console.log("cursor-bridge: building MCP server…");
+  await wait(run("pnpm", ["mcp:build"]));
+}
 
-  const bridge = run("node", ["bridge.mjs"]);
-  const ui = run("pnpm", ["--filter", "ui", "dev"]);
-
+function supervise(procs) {
   const shutdown = () => {
-    bridge.kill("SIGTERM");
-    ui.kill("SIGTERM");
+    for (const proc of procs) proc.kill("SIGTERM");
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  bridge.on("exit", (code) => {
-    ui.kill("SIGTERM");
-    process.exit(code ?? 0);
-  });
-  ui.on("exit", (code) => {
-    bridge.kill("SIGTERM");
-    process.exit(code ?? 0);
-  });
+  for (const proc of procs) {
+    proc.on("exit", (code) => {
+      shutdown();
+      process.exit(code ?? 0);
+    });
+  }
+}
+
+await ensureMcpBuilt();
+
+if (prod) {
+  console.log("cursor-bridge: prod mode");
+  console.log("  API  → http://127.0.0.1:4242/api/*");
+  console.log("  UI   → http://127.0.0.1:4242");
+  console.log("  MCP  → http://127.0.0.1:4243/mcp\n");
+  await wait(run("pnpm", ["--filter", "ui", "build"]));
+  supervise([run("node", ["bridge.mjs"]), run("pnpm", ["mcp:start"])]);
+} else {
+  console.log("cursor-bridge: dev mode");
+  console.log("  API  → http://127.0.0.1:4242/api/*");
+  console.log("  UI   → http://localhost:5173 (HMR)");
+  console.log("  MCP  → http://127.0.0.1:4243/mcp");
+  console.log("  prod → pnpm start -- --prod\n");
+  supervise([
+    run("node", ["bridge.mjs"]),
+    run("pnpm", ["--filter", "ui", "dev"]),
+    run("pnpm", ["mcp:start"]),
+  ]);
 }

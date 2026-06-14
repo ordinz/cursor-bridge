@@ -2,7 +2,7 @@
 
 HTTP MCP server (Streamable HTTP + legacy SSE) that wraps the [cursor-bridge](../README.md) REST + SSE API.
 
-**Prerequisite:** the bridge must be running locally (`pnpm bridge`).
+**Prerequisite:** the bridge must be running locally (`pnpm start` or `pnpm bridge`).
 
 ## Install
 
@@ -13,10 +13,13 @@ pnpm install && pnpm --filter @cursor-bridge/mcp build
 ## Start
 
 ```bash
-# terminal 1 — bridge API
-pnpm bridge
+# bridge :4242 + MCP :4243 (+ UI in dev)
+pnpm start
+```
 
-# terminal 2 — MCP HTTP server (default :4243)
+MCP only (bridge must already be running):
+
+```bash
 pnpm mcp:start
 ```
 
