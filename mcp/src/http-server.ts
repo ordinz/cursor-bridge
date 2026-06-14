@@ -1,25 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { BridgeClient } from "./client.js";
 import { requireMcpApiKey } from "./auth.js";
-import { registerTools } from "./tools.js";
+import { createConfiguredMcpServer } from "./server-meta.js";
 
 type ActiveTransport =
   | StreamableHTTPServerTransport
   | SSEServerTransport;
 
-function createMcpServer(bridgeClient: BridgeClient): McpServer {
-  const server = new McpServer({
-    name: "cursor-bridge",
-    version: "1.0.0",
-  });
-  registerTools(server, bridgeClient);
-  return server;
+async function connectMcpServer(
+  bridgeClient: BridgeClient,
+  transport: ActiveTransport,
+): Promise<void> {
+  const server = await createConfiguredMcpServer(bridgeClient);
+  await server.connect(transport);
 }
 
 function jsonRpcError(res: import("express").Response, status: number, message: string): void {
@@ -67,6 +65,18 @@ export function startMcpHttpServer(options: McpHttpServerOptions): HttpServer {
     });
   });
 
+  app.get("/", (_req, res) => {
+    res.json({
+      ok: true,
+      service: "cursor-bridge-mcp",
+      mcp: "/mcp",
+      health: "/health",
+      sse: "/sse",
+      sseMessages: "/messages",
+      note: "MCP clients should POST to /mcp (Streamable HTTP). This root URL is for humans only.",
+    });
+  });
+
   app.use(requireMcpApiKey);
 
   app.all("/mcp", async (req, res) => {
@@ -104,7 +114,7 @@ export function startMcpHttpServer(options: McpHttpServerOptions): HttpServer {
           const sid = transport?.sessionId;
           if (sid && transports[sid]) delete transports[sid];
         };
-        await createMcpServer(options.bridgeClient).connect(transport);
+        await connectMcpServer(options.bridgeClient, transport);
       } else {
         jsonRpcError(res, 400, "Bad Request: No valid session ID provided");
         return;
@@ -126,7 +136,7 @@ export function startMcpHttpServer(options: McpHttpServerOptions): HttpServer {
       res.on("close", () => {
         delete transports[transport.sessionId];
       });
-      await createMcpServer(options.bridgeClient).connect(transport);
+      await connectMcpServer(options.bridgeClient, transport);
     } catch (err) {
       console.error("MCP SSE error:", err);
       if (!res.headersSent) res.status(500).end();

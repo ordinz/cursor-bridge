@@ -20,15 +20,15 @@ rm -rf node_modules
 pnpm install
 ```
 
-Default (**dev**): bridge API on `:4242`, oversight UI with HMR on `:5173`.
+Default (**dev**): bridge API on `:4242`, MCP on `:4243`, oversight UI with HMR on `:5173`.
 
-Single-port (**prod**): built UI + API together on `:4242`:
+Single-port (**prod**): built UI + API together on `:4242`, MCP still on `:4243`:
 
 ```bash
 pnpm start -- --prod
 ```
 
-API-only (no UI process):
+API-only (no UI or MCP):
 
 ```bash
 pnpm bridge
@@ -36,11 +36,12 @@ pnpm bridge
 
 ## Ports
 
-| Command | API | UI |
-|---------|-----|-----|
-| `pnpm start` | http://127.0.0.1:4242/api/* | http://localhost:5173 |
-| `pnpm start -- --prod` | http://127.0.0.1:4242/api/* | http://127.0.0.1:4242 |
-| `pnpm bridge` | http://127.0.0.1:4242/api/* | static build if present |
+| Command | API | MCP | UI |
+|---------|-----|-----|-----|
+| `pnpm start` | http://127.0.0.1:4242/api/* | http://127.0.0.1:4243/mcp | http://localhost:5173 |
+| `pnpm start -- --prod` | http://127.0.0.1:4242/api/* | http://127.0.0.1:4243/mcp | http://127.0.0.1:4242 |
+| `pnpm bridge` | http://127.0.0.1:4242/api/* | — | static build if present |
+| `pnpm mcp:start` | (needs bridge) | http://127.0.0.1:4243/mcp | — |
 
 Agents should always target `http://127.0.0.1:4242/api/*`.
 
@@ -54,9 +55,14 @@ See **[AGENT_API.md](./AGENT_API.md)** for the machine-oriented client contract 
 HTTP MCP server for **Perplexity Custom connector**, Cloudflare tunnel, and other remote MCP clients:
 
 ```bash
-pnpm install && pnpm mcp:build
-pnpm bridge      # :4242 REST API
-pnpm mcp:start   # :4243 Streamable HTTP + SSE MCP
+pnpm install
+pnpm start       # bridge :4242 + MCP :4243 (+ UI in dev)
+```
+
+Or run MCP alone (requires `pnpm bridge` in another terminal):
+
+```bash
+pnpm mcp:build && pnpm mcp:start
 ```
 
 See **[mcp/README.md](./mcp/README.md)** for tunnel setup, `MCP_API_KEY`, and Perplexity registration.
