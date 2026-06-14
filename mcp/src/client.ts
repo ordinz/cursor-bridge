@@ -34,11 +34,19 @@ function mapErrorCode(code: string | undefined, status: number): BridgeErrorCode
 }
 
 export class BridgeClient {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly apiKey?: string,
+  ) {}
 
   private url(path: string): string {
     const base = this.baseUrl.replace(/\/$/, "");
     return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  private authHeaders(): Record<string, string> {
+    if (!this.apiKey) return {};
+    return { Authorization: `Bearer ${this.apiKey}` };
   }
 
   private async request<T>(
@@ -49,6 +57,7 @@ export class BridgeClient {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...this.authHeaders(),
         ...init?.headers,
       },
     });
@@ -175,7 +184,10 @@ export class BridgeClient {
       this.url(`/sessions/${encodeURIComponent(sessionId)}/chat`),
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...this.authHeaders(),
+        },
         body: JSON.stringify({ prompt, allowOverlap, source: "api" }),
       },
     );
