@@ -1,9 +1,9 @@
 # cursor-bridge
 
-Local HTTP bridge between external AI agents and the Cursor SDK, plus a human oversight UI.
+Local HTTP bridge between external AI agents and the Cursor SDK, plus a human oversight UI and macOS menu bar controls.
 
 **Primary operator:** an external AI agent calling the REST/SSE API.  
-**Secondary operator:** a human monitoring tool activity, stopping runs, and injecting manual prompts.
+**Secondary operator:** a human monitoring tool activity, stopping runs, and injecting manual prompts — via the **oversight UI** or the **SwiftBar menu bar plugin**.
 
 ## Quick start
 
@@ -34,22 +34,53 @@ API-only (no UI or MCP):
 pnpm bridge
 ```
 
+## Oversight UI
+
+The oversight UI is a React dashboard for watching agents work and stepping in when needed. Open it at **http://localhost:5173** in dev (`pnpm start`) or **http://127.0.0.1:4242** in prod (`pnpm start -- --prod`).
+
+| Area | What it does |
+|------|----------------|
+| **Activity feed** | Live stream of assistant messages and run status over SSE |
+| **Tool activity** | Side panel listing every tool call — name, args, result, running/completed state |
+| **Session sidebar** | Browse and resume past agents per project; delete history |
+| **Oversight controls** | Pick project and model, start a new session, stop a running agent |
+| **Manual override** | Inject a human prompt into the active session while an agent is running |
+| **Status bar** | Bridge health, Cursor readiness, version, session cwd/model, run state |
+
+The layout is responsive — on smaller screens a tab bar switches between feed, tools, and sessions. Health is polled every 30 seconds; the footer mirrors the same green/amber/red signals the SwiftBar plugin uses.
+
 ## Menu bar (macOS)
 
-Run cursor-bridge from the menu bar with a green/black status indicator using [SwiftBar](https://swiftbar.app):
+Run cursor-bridge from the menu bar with [SwiftBar](https://swiftbar.app). The plugin lives at [`scripts/menubar/cursor-bridge.10s.sh`](scripts/menubar/cursor-bridge.10s.sh) and polls `GET /api/health` every 10 seconds.
+
+**Install**
 
 ```bash
 brew install --cask swiftbar
 ln -sf "$(pwd)/scripts/menubar/cursor-bridge.10s.sh" \
-  "/Users/ordin/swiftbar/cursor-bridge.10s.sh"
+  "$HOME/swiftbar/cursor-bridge.10s.sh"   # or your SwiftBar plugins folder
 ```
 
-Point SwiftBar at your plugins folder (`/Users/ordin/swiftbar`) if it is not already configured.
+Point SwiftBar at your plugins folder (e.g. `~/swiftbar`) in SwiftBar → Preferences.
 
-- **🟢** — bridge is running (`GET /api/health` responds)
-- **⚫** — stopped
+**Indicator**
 
-Click the icon to **Start**, **Stop**, open the UI (`:5173`), or view `/tmp/cursor-bridge.log`. Status refreshes every 10 seconds.
+| Icon | Meaning |
+|------|---------|
+| 🟢 | Bridge is running and `/api/health` responds |
+| ⚫ | Stopped |
+
+**Menu actions**
+
+| Action | What it does |
+|--------|----------------|
+| **Start** | Launch dev stack in background (`pnpm start` via `start-bg.sh`) |
+| **Stop** | Stop listeners on `:4242`, `:4243`, `:5173` and the supervisor |
+| **Open UI** | Open the oversight dashboard at `http://localhost:5173` |
+| **View log** | Open `/tmp/cursor-bridge.log` |
+| **GitHub** | Open the [cursor-bridge repo](https://github.com/ordinz/cursor-bridge) |
+| **Cloudflare tunnel** | Open [tunnel routes](https://dash.cloudflare.com/5a4fdf7e9a52050c3677ebe502a344d0/tunnels/e98e39df-8b06-4379-b390-a372472284e9/routes) in the Cloudflare dashboard |
+| **Refresh** | Re-poll health immediately |
 
 CLI equivalents:
 
