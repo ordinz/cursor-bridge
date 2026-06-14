@@ -34,6 +34,30 @@ API-only (no UI or MCP):
 pnpm bridge
 ```
 
+## Menu bar (macOS)
+
+Run cursor-bridge from the menu bar with a green/black status indicator using [SwiftBar](https://swiftbar.app):
+
+```bash
+brew install --cask swiftbar
+ln -sf "$(pwd)/scripts/menubar/cursor-bridge.10s.sh" \
+  "/Users/ordin/swiftbar/cursor-bridge.10s.sh"
+```
+
+Point SwiftBar at your plugins folder (`/Users/ordin/swiftbar`) if it is not already configured.
+
+- **🟢** — bridge is running (`GET /api/health` responds)
+- **⚫** — stopped
+
+Click the icon to **Start**, **Stop**, open the UI (`:5173`), or view `/tmp/cursor-bridge.log`. Status refreshes every 10 seconds.
+
+CLI equivalents:
+
+```bash
+pnpm start:bg   # start dev stack in background
+pnpm stop       # stop processes on :4242, :4243, :5173
+```
+
 ## Ports
 
 | Command | API | MCP | UI |

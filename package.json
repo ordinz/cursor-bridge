@@ -6,6 +6,8 @@
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "start": "node scripts/run.mjs",
+    "start:bg": "bash scripts/start-bg.sh",
+    "stop": "bash scripts/stop.sh",
     "build": "pnpm --filter ui build",
     "bridge": "node bridge.mjs",
     "mcp:build": "pnpm --filter @cursor-bridge/mcp build",
