@@ -20,6 +20,8 @@ const KNOWN_CODES = new Set<string>([
   "UNKNOWN_PROJECT",
   "PROJECT_DISABLED",
   "RUN_FAILED",
+  "TELEGRAM_NOT_CONFIGURED",
+  "TELEGRAM_SEND_FAILED",
 ]);
 
 function mapErrorCode(code: string | undefined, status: number): BridgeErrorCode {
@@ -172,6 +174,15 @@ export class BridgeClient {
   async closeSession(sessionId: string): Promise<void> {
     await this.request(`/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
+    });
+  }
+
+  async sendTelegram(
+    message: string,
+  ): Promise<{ ok: boolean; messageId: number | null }> {
+    return this.request("/telegram", {
+      method: "POST",
+      body: JSON.stringify({ message }),
     });
   }
 

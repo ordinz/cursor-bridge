@@ -331,6 +331,22 @@ export function registerTools(server: McpServer, client: BridgeClient): void {
   );
 
   server.tool(
+    "send_telegram",
+    "Send a text message to the configured Telegram chat. Requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in bridge .env.",
+    {
+      message: z.string().min(1).describe("Message text to send"),
+    },
+    async ({ message }) => {
+      try {
+        const result = await client.sendTelegram(message);
+        return okContent("Telegram message sent.", result);
+      } catch (err) {
+        return errContent(err);
+      }
+    },
+  );
+
+  server.tool(
     "run_oneshot",
     "Default tool: create a session, send one prompt, stream to completion, and close the session. Best for single-turn tasks.",
     {

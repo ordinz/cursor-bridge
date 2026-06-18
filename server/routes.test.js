@@ -330,3 +330,39 @@ test("serializeSdkEvent splits tool_call and tool_result", () => {
   );
   assert.equal(done.type, "tool_result");
 });
+
+test("POST /telegram/send returns 503 when not configured", async () => {
+  const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_CHAT_ID;
+
+  try {
+    await withTestServer(async ({ base }) => {
+      const res = await fetch(`${base}/telegram/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "hello" }),
+      });
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.equal(body.code, "TELEGRAM_NOT_CONFIGURED");
+    });
+  } finally {
+    if (prevToken !== undefined) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+    if (prevChat !== undefined) process.env.TELEGRAM_CHAT_ID = prevChat;
+  }
+});
+
+test("POST /telegram rejects empty message", async () => {
+  await withTestServer(async ({ base }) => {
+    const res = await fetch(`${base}/telegram`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, "INVALID_REQUEST");
+  });
+});

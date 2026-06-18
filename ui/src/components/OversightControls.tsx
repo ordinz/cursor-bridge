@@ -1,4 +1,5 @@
 import type { Model, Project, Session } from "../lib/types";
+import { TelegramSend } from "./TelegramSend";
 
 interface OversightControlsProps {
   session: Session | null;
@@ -36,13 +37,16 @@ export function OversightControls({
     >
       <div className="flex items-center gap-2">
         <h1 className="text-sm font-semibold text-zinc-200">cursor-bridge</h1>
-        <span className="hidden text-xs text-zinc-600 sm:inline">oversight</span>
+        <span className="hidden text-xs text-zinc-600 sm:inline">
+          agent console
+        </span>
         {running && (
           <span className="ml-1 rounded bg-amber-950/60 px-1.5 py-0.5 text-[10px] uppercase text-amber-400 lg:hidden">
             running
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <TelegramSend />
           {running && (
             <button
               type="button"
@@ -99,40 +103,19 @@ export function OversightControls({
       </div>
 
       {session && (
-        <div className="mt-2 space-y-1 text-xs text-zinc-600">
-          <div className="truncate">
-            {session.name ?? session.sessionId.slice(0, 8)}… · {session.model}{" "}
-            ·{" "}
-            <span
-              className={
-                runStatus === "running"
-                  ? "text-amber-400"
-                  : runStatus === "error"
-                    ? "text-red-400"
-                    : "text-zinc-500"
-              }
-            >
-              {runStatus}
-            </span>
-          </div>
-          {session.lastPrompt && (
-            <div className="truncate" title={session.lastPrompt}>
-              Last prompt: {session.lastPrompt}
-            </div>
-          )}
-          {session.lastAssistantSnippet && (
-            <div className="truncate" title={session.lastAssistantSnippet}>
-              Assistant: {session.lastAssistantSnippet}
-            </div>
-          )}
-          <div className="text-[10px] text-zinc-700">
-            Updated{" "}
-            {new Date(session.lastActivityAt).toLocaleTimeString(undefined, {
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-            })}
-          </div>
+        <div className="mt-2 truncate text-xs text-zinc-600">
+          {session.name ?? session.sessionId.slice(0, 8)}… · {session.model} ·{" "}
+          <span
+            className={
+              runStatus === "running"
+                ? "text-amber-400"
+                : runStatus === "error"
+                  ? "text-red-400"
+                  : "text-zinc-500"
+            }
+          >
+            {runStatus}
+          </span>
         </div>
       )}
     </header>

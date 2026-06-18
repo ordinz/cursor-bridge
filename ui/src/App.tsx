@@ -2,15 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { getHealth } from "./lib/api";
 import type { HealthResponse } from "./lib/types";
 import { ActivityFeed } from "./components/ActivityFeed";
-import { ManualOverride } from "./components/ManualOverride";
+import { InstructionsPanel } from "./components/InstructionsPanel";
 import {
   MobileTabBar,
   type MobilePanel,
 } from "./components/MobileTabBar";
 import { OversightControls } from "./components/OversightControls";
+import { PromptInput } from "./components/PromptInput";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { StatusBar } from "./components/StatusBar";
-import { ToolActivity } from "./components/ToolActivity";
 import { useAgentHistory } from "./hooks/useAgentHistory";
 import { useChatSession, SESSION_STORAGE_KEY } from "./hooks/useChatSession";
 import { useModels } from "./hooks/useModels";
@@ -22,7 +22,7 @@ export default function App() {
     useModels();
   const [project, setProject] = useState("app");
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("feed");
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("instructions");
 
   const apiOk = health?.ok ?? false;
   const cursorReady = health?.cursor.ready ?? false;
@@ -47,8 +47,6 @@ export default function App() {
     stopRun,
     clearSession,
   } = useChatSession();
-
-  const toolCount = feed.filter((i) => i.kind === "tool").length;
 
   useEffect(() => {
     const enabled = projects.filter((p) => p.canCreateSession !== false);
@@ -75,6 +73,12 @@ export default function App() {
       setMobilePanel("feed");
     }
   }, [runStatus]);
+
+  useEffect(() => {
+    if (!session && feed.length === 0) {
+      setMobilePanel("instructions");
+    }
+  }, [session, feed.length]);
 
   useEffect(() => {
     if (projectsLoading || session) return;
@@ -126,7 +130,7 @@ export default function App() {
     [project, selectedModel, resumeAgent],
   );
 
-  const handleManualSend = useCallback(
+  const handlePromptSend = useCallback(
     async (prompt: string) => {
       let active = session;
       if (!active) {
@@ -165,7 +169,7 @@ export default function App() {
 
   const running = runStatus === "running";
 
-  const mainContent = (
+  const conversationContent = (
     <>
       {projectsLoading && (
         <div className="p-4 text-sm text-zinc-500">Loading projects…</div>
@@ -180,13 +184,24 @@ export default function App() {
           Loading conversation history…
         </div>
       )}
-      <ActivityFeed items={feed} running={running} />
-      <ManualOverride disabled={!apiOk || !cursorReady || running} onSend={handleManualSend} />
+      <ActivityFeed
+        items={feed}
+        running={running}
+        onOpenInstructions={() => setMobilePanel("instructions")}
+      />
+      <PromptInput
+        disabled={!apiOk || !cursorReady || running}
+        running={running}
+        onSend={handlePromptSend}
+      />
     </>
   );
 
   return (
-    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+    <div
+      className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-zinc-950 text-zinc-100"
+      aria-label="cursor-bridge agent console"
+    >
       <OversightControls
         session={session}
         project={project}
@@ -219,20 +234,20 @@ export default function App() {
 
         <main
           className={
-            mobilePanel === "feed"
-              ? "flex min-w-0 flex-1 flex-col overflow-hidden"
-              : "hidden min-w-0 flex-1 flex-col overflow-hidden lg:flex"
+            mobilePanel === "instructions"
+              ? "hidden min-w-0 flex-1 flex-col overflow-hidden"
+              : "flex min-w-0 flex-1 flex-col overflow-hidden"
           }
+          aria-label="Conversation"
         >
-          {mainContent}
+          {conversationContent}
         </main>
 
-        <ToolActivity
-          items={feed}
+        <InstructionsPanel
           className={
-            mobilePanel === "tools"
-              ? "flex w-full min-w-0 border-l-0 lg:w-80 lg:border-l"
-              : "hidden lg:flex lg:w-80"
+            mobilePanel === "instructions"
+              ? "flex min-w-0 flex-1 flex-col overflow-hidden"
+              : "hidden"
           }
         />
       </div>
@@ -245,11 +260,7 @@ export default function App() {
         bridgeVersion={health?.version}
       />
 
-      <MobileTabBar
-        active={mobilePanel}
-        onChange={setMobilePanel}
-        toolCount={toolCount}
-      />
+      <MobileTabBar active={mobilePanel} onChange={setMobilePanel} />
     </div>
   );
 }

@@ -48,3 +48,23 @@ export function validateSessionId(sessionId) {
   }
   return sessionId;
 }
+
+export function validateTelegramMessage(message) {
+  if (message === undefined || message === null) {
+    throw new InvalidRequestError("message is required");
+  }
+  if (typeof message !== "string") {
+    throw new InvalidRequestError("message must be a string");
+  }
+  const trimmed = message.trim();
+  if (!trimmed) {
+    throw new InvalidRequestError("message must not be empty");
+  }
+  if (trimmed.length > 4096) {
+    throw new InvalidRequestError(
+      "message exceeds Telegram maximum length of 4096 characters",
+      "MESSAGE_TOO_LONG",
+    );
+  }
+  return trimmed;
+}

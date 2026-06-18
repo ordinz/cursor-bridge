@@ -21,7 +21,17 @@ HEALTH_CACHE="/tmp/cursor-bridge-health.json"
 LOG="/tmp/cursor-bridge.log"
 
 if curl -sf --max-time 2 "$HEALTH_URL" >"$HEALTH_CACHE" 2>/dev/null; then
-  echo "🟢"
+  ACTIVE_RUNS="$(python3 - "$HEALTH_CACHE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+print(data.get("agents", {}).get("activeRuns", 0))
+PY
+)"
+  if [ "${ACTIVE_RUNS:-0}" -gt 0 ]; then
+    echo "🟡"
+  else
+    echo "🟢"
+  fi
 else
   rm -f "$HEALTH_CACHE"
   echo "⚫"
@@ -35,8 +45,16 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 version = data.get("version", "?")
 ready = data.get("cursor", {}).get("ready", False)
-status = "cursor ready" if ready else "cursor not ready"
-print(f"v{version} — {status}")
+active = data.get("agents", {}).get("activeRuns", 0)
+sessions = data.get("agents", {}).get("sessionCount", 0)
+cursor_status = "cursor ready" if ready else "cursor not ready"
+if active:
+    agent_status = f"{active} agent running"
+elif sessions:
+    agent_status = f"{sessions} session(s) idle"
+else:
+    agent_status = "no sessions"
+print(f"v{version} — {cursor_status} — {agent_status}")
 PY
 else
   echo "stopped"

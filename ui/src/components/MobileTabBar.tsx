@@ -1,21 +1,20 @@
-export type MobilePanel = "history" | "feed" | "tools";
+export type MobilePanel = "history" | "feed" | "instructions";
 
 interface MobileTabBarProps {
   active: MobilePanel;
   onChange: (panel: MobilePanel) => void;
-  toolCount: number;
 }
 
 const tabs: { id: MobilePanel; label: string }[] = [
   { id: "history", label: "History" },
-  { id: "feed", label: "Activity" },
-  { id: "tools", label: "Tools" },
+  { id: "feed", label: "Conversation" },
+  { id: "instructions", label: "Instructions" },
 ];
 
-export function MobileTabBar({ active, onChange, toolCount }: MobileTabBarProps) {
+export function MobileTabBar({ active, onChange }: MobileTabBarProps) {
   return (
     <nav
-      className="flex shrink-0 border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className="flex shrink-0 border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]"
       data-testid="mobile-tab-bar"
       aria-label="Primary navigation"
     >
@@ -32,14 +31,7 @@ export function MobileTabBar({ active, onChange, toolCount }: MobileTabBarProps)
           data-testid={`mobile-tab-${tab.id}`}
           aria-current={active === tab.id ? "page" : undefined}
         >
-          <span className="flex items-center gap-1">
-            {tab.label}
-            {tab.id === "tools" && toolCount > 0 && (
-              <span className="rounded-full bg-amber-900/50 px-1.5 text-[10px] text-amber-300">
-                {toolCount}
-              </span>
-            )}
-          </span>
+          {tab.label}
         </button>
       ))}
     </nav>

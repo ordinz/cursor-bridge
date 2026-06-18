@@ -6,6 +6,7 @@ import type {
   Model,
   ProjectsResponse,
   Session,
+  TelegramSendResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -104,5 +105,13 @@ export async function cancelSession(sessionId: string) {
 export async function closeSession(sessionId: string) {
   return json<{ ok: boolean }>(`/api/sessions/${sessionId}`, {
     method: "DELETE",
+  });
+}
+
+export async function sendTelegram(message: string) {
+  return json<TelegramSendResponse>("/api/telegram", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
   });
 }

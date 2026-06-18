@@ -1,0 +1,103 @@
+import { useEffect, useId, useRef, useState } from "react";
+import { getHealth } from "../lib/api";
+import { TelegramForm } from "./TelegramForm";
+
+function TelegramIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </svg>
+  );
+}
+
+export function TelegramSend() {
+  const [open, setOpen] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    void getHealth()
+      .then((health) => setConfigured(health.telegram?.configured ?? false))
+      .catch(() => setConfigured(false));
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open) {
+      if (!dialog.open) dialog.showModal();
+    } else if (dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  function closeDialog() {
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex min-h-11 items-center gap-1.5 rounded-md bg-[#229ED9] px-3 py-2 text-sm font-medium text-white active:bg-[#1a8bc4]"
+        data-testid="telegram-open-button"
+        aria-haspopup="dialog"
+      >
+        <TelegramIcon className="h-4 w-4" />
+        <span className="hidden sm:inline">Telegram</span>
+      </button>
+
+      <dialog
+        ref={dialogRef}
+        aria-labelledby={titleId}
+        className="fixed inset-0 z-50 m-0 h-dvh max-h-dvh w-full max-w-none border-0 bg-transparent p-0 backdrop:bg-black/60 open:flex open:items-center open:justify-center open:p-4"
+        onClose={closeDialog}
+        onClick={(e) => {
+          if (e.target === dialogRef.current) closeDialog();
+        }}
+        data-testid="telegram-dialog"
+      >
+        <div
+          className="w-full max-w-md rounded-lg border border-zinc-700 bg-zinc-900 p-4 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h2 id={titleId} className="text-sm font-semibold text-zinc-100">
+                Send Telegram message
+              </h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                {configured
+                  ? "Goes to your configured chat."
+                  : "Add TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to .env and restart."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeDialog}
+              className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <TelegramForm
+            configured={configured}
+            autoFocus
+            showCancel
+            onCancel={closeDialog}
+            onSent={() => window.setTimeout(closeDialog, 600)}
+          />
+        </div>
+      </dialog>
+    </>
+  );
+}

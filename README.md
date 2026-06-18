@@ -36,18 +36,20 @@ pnpm bridge
 
 ## Oversight UI
 
-The oversight UI is a React dashboard for watching agents work and stepping in when needed. Open it at **http://localhost:5173** in dev (`pnpm start`) or **http://127.0.0.1:4242** in prod (`pnpm start -- --prod`).
+The oversight UI is a React agent console for sending prompts and watching agents work. Open it at **http://localhost:5173** in dev (`pnpm start`) or **http://127.0.0.1:4242** in prod (`pnpm start -- --prod`).
+
+**If you are on this page, use the Prompt form — not MCP.** MCP is a separate integration path for Cursor IDE agents.
 
 | Area | What it does |
 |------|----------------|
-| **Activity feed** | Live stream of assistant messages and run status over SSE |
-| **Tool activity** | Side panel listing every tool call — name, args, result, running/completed state |
+| **Conversation** | Live stream of prompts, assistant replies, and run status over SSE |
+| **Prompt** | Type a task and press Send — the primary way to dispatch work from the browser UI |
+| **Instructions** | Self-explanatory guide for AI operators viewing the page (includes "do not use MCP" callout) |
 | **Session sidebar** | Browse and resume past agents per project; delete history |
-| **Oversight controls** | Pick project and model, start a new session, stop a running agent |
-| **Manual override** | Inject a human prompt into the active session while an agent is running |
+| **Header controls** | Pick project and model, start a new session, stop a running agent |
 | **Status bar** | Bridge health, Cursor readiness, version, session cwd/model, run state |
 
-The layout is responsive — on smaller screens a tab bar switches between feed, tools, and sessions. Health is polled every 30 seconds; the footer mirrors the same green/amber/red signals the SwiftBar plugin uses.
+Tool calls are hidden by default in the conversation feed; toggle **Show tool calls** to reveal them. The layout uses a tab bar (History, Conversation, Instructions) on all screen sizes. Health is polled every 30 seconds; the footer mirrors the same green/amber/red signals the SwiftBar plugin uses.
 
 ## Menu bar (macOS)
 
@@ -67,8 +69,11 @@ Point SwiftBar at your plugins folder (e.g. `~/swiftbar`) in SwiftBar → Prefer
 
 | Icon | Meaning |
 |------|---------|
-| 🟢 | Bridge is running and `/api/health` responds |
+| 🟢 | Bridge is up, no agent runs in progress |
+| 🟡 | Bridge is up and at least one agent is actively running |
 | ⚫ | Stopped |
+
+The plugin polls `/api/health` every 10 seconds. Rename the file to `cursor-bridge.3s.sh` (and update the symlink) for faster yellow/green transitions when agents start and finish.
 
 **Menu actions**
 

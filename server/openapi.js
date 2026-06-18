@@ -95,6 +95,19 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
                           reason: { type: "string", nullable: true },
                         },
                       },
+                      agents: {
+                        type: "object",
+                        properties: {
+                          activeRuns: {
+                            type: "integer",
+                            description: "Sessions with an active agent run",
+                          },
+                          sessionCount: {
+                            type: "integer",
+                            description: "Open sessions in memory",
+                          },
+                        },
+                      },
                     },
                   },
                 },
@@ -334,6 +347,85 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
               description: "No active run",
               content: { "application/json": { schema: errorSchema } },
             },
+          },
+        },
+      },
+      "/telegram": {
+        post: {
+          operationId: "sendTelegram",
+          summary: "Send a message to the configured Telegram chat",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["message"],
+                  properties: {
+                    message: { type: "string", maxLength: 4096 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: "Message sent",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      ok: { type: "boolean" },
+                      messageId: { type: "integer", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: "Invalid message", content: { "application/json": { schema: errorSchema } } },
+            502: { description: "Telegram API error", content: { "application/json": { schema: errorSchema } } },
+            503: { description: "Telegram not configured", content: { "application/json": { schema: errorSchema } } },
+          },
+        },
+      },
+      "/telegram/send": {
+        post: {
+          operationId: "sendTelegramLegacy",
+          summary: "Send a message to the configured Telegram chat (alias)",
+          deprecated: true,
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["message"],
+                  properties: {
+                    message: { type: "string", maxLength: 4096 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: "Message sent",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      ok: { type: "boolean" },
+                      messageId: { type: "integer", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: "Invalid message", content: { "application/json": { schema: errorSchema } } },
+            502: { description: "Telegram API error", content: { "application/json": { schema: errorSchema } } },
+            503: { description: "Telegram not configured", content: { "application/json": { schema: errorSchema } } },
           },
         },
       },

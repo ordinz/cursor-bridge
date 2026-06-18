@@ -26,13 +26,24 @@ app.use("/api", createRouter(sessions));
 
 app.post("/prompt", (req, res) => handleLegacyPrompt(req, res));
 
+const uiDist = path.join(__dirname, "ui", "dist");
+
+app.get("/telegram", localUiOnly, (_req, res) => {
+  res.sendFile(path.join(uiDist, "telegram.html"), (err) => {
+    if (err) {
+      res
+        .status(503)
+        .send("Telegram page not built. Run `pnpm build` in the ui package.");
+    }
+  });
+});
+
 app.use(blockPublicUi);
 
-const uiDist = path.join(__dirname, "ui", "dist");
 const examplesDir = path.join(__dirname, "examples");
 app.use("/examples", localUiOnly, express.static(examplesDir));
 app.use(localUiOnly, express.static(uiDist));
-app.get(/^(?!\/api).*/, localUiOnly, (_req, res) => {
+app.get(/^(?!\/api)(?!\/telegram).*/, localUiOnly, (_req, res) => {
   res.sendFile(path.join(uiDist, "index.html"), (err) => {
     if (err) {
       res.status(200).send(`<!DOCTYPE html><html><body><h1>cursor-bridge</h1><p>API running. Build UI with <code>npm run build</code>.</p></body></html>`);

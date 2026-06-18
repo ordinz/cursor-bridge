@@ -13,6 +13,13 @@ export interface HealthResponse {
     ready: boolean;
     reason: string | null;
   };
+  agents: {
+    activeRuns: number;
+    sessionCount: number;
+  };
+  telegram: {
+    configured: boolean;
+  };
 }
 
 export interface Project {
@@ -60,6 +67,11 @@ export interface ApiErrorBody {
   error: string;
   code: string;
   sessionId?: string;
+}
+
+export interface TelegramSendResponse {
+  ok: boolean;
+  messageId: number | null;
 }
 
 export type FeedItemSource = "manual" | "api" | "history";

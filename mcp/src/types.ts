@@ -13,6 +13,13 @@ export interface HealthResponse {
     ready: boolean;
     reason: string | null;
   };
+  agents: {
+    activeRuns: number;
+    sessionCount: number;
+  };
+  telegram: {
+    configured: boolean;
+  };
 }
 
 export interface Project {
@@ -108,6 +115,8 @@ export type BridgeErrorCode =
   | "UNKNOWN_PROJECT"
   | "PROJECT_DISABLED"
   | "RUN_FAILED"
+  | "TELEGRAM_NOT_CONFIGURED"
+  | "TELEGRAM_SEND_FAILED"
   | "BRIDGE_ERROR"
   | "CURSOR_NOT_READY";
 

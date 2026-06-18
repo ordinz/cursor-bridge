@@ -21,10 +21,17 @@ import { createSseEvent, writeSseEvent } from "./sse-events.js";
 import { setupSse, startHeartbeat, streamRun } from "./stream.js";
 import { VERSION } from "./version.js";
 import {
+  isTelegramConfigured,
+  sendTelegramMessage,
+  TelegramNotConfiguredError,
+  TelegramSendError,
+} from "./telegram.js";
+import {
   InvalidRequestError,
   validateProjectId,
   validatePrompt,
   validateSessionId,
+  validateTelegramMessage,
 } from "./validate.js";
 
 export function createRouter(sessions) {
@@ -40,6 +47,7 @@ export function createRouter(sessions) {
   router.get("/health", async (_req, res, next) => {
     try {
       const cursor = await checkCursorConnectivity();
+      const activeRuns = sessions.countActiveRuns();
       res.json({
         ok: true,
         version: VERSION,
@@ -52,6 +60,13 @@ export function createRouter(sessions) {
           apiKeyConfigured: Boolean(process.env.CURSOR_API_KEY),
           ready: cursor.ready,
           reason: cursor.reason ?? null,
+        },
+        agents: {
+          activeRuns,
+          sessionCount: sessions.sessions.size,
+        },
+        telegram: {
+          configured: isTelegramConfigured(),
         },
       });
     } catch (err) {
@@ -332,6 +347,19 @@ export function createRouter(sessions) {
     }
   });
 
+  async function handleTelegramSend(req, res, next) {
+    try {
+      const message = validateTelegramMessage(req.body?.message);
+      const result = await sendTelegramMessage(message);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  router.post("/telegram", handleTelegramSend);
+  router.post("/telegram/send", handleTelegramSend);
+
   router.use((err, _req, res, _next) => {
     const status =
       err instanceof ProjectError
@@ -344,7 +372,11 @@ export function createRouter(sessions) {
               ? err.status
               : err instanceof InvalidRequestError
                 ? err.status
-                : 500;
+                : err instanceof TelegramNotConfiguredError
+                  ? err.status
+                  : err instanceof TelegramSendError
+                    ? err.status
+                    : 500;
     res.status(status).json(errorBody(err));
   });
 

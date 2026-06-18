@@ -61,6 +61,14 @@ export class SessionManager {
     return Boolean(record?.runStatus === "running" && record.activeRun);
   }
 
+  countActiveRuns() {
+    let count = 0;
+    for (const record of this.sessions.values()) {
+      if (record.runStatus === "running" && record.activeRun) count++;
+    }
+    return count;
+  }
+
   /** @throws {SessionNotFoundError | SessionBusyError} */
   assertCanChat(sessionId) {
     const record = this.get(sessionId);
