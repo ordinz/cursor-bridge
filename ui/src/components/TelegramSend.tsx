@@ -92,6 +92,7 @@ export function TelegramSend() {
           <TelegramForm
             configured={configured}
             autoFocus
+            open={open}
             showCancel
             onCancel={closeDialog}
             onSent={() => window.setTimeout(closeDialog, 600)}

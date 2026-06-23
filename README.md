@@ -57,10 +57,18 @@ Run cursor-bridge from the menu bar with [SwiftBar](https://swiftbar.app). The p
 
 **Install**
 
+Plugins live in [`scripts/menubar/`](scripts/menubar/). Symlink them into your SwiftBar folder (default `~/swiftbar`):
+
 ```bash
 brew install --cask swiftbar
-ln -sf "$(pwd)/scripts/menubar/cursor-bridge.10s.sh" \
-  "$HOME/swiftbar/cursor-bridge.10s.sh"   # or your SwiftBar plugins folder
+./scripts/menubar/install.sh
+```
+
+Or link individually:
+
+```bash
+ln -sf "$(pwd)/scripts/menubar/cursor-bridge.10s.sh" "$HOME/swiftbar/cursor-bridge.10s.sh"
+ln -sf "$(pwd)/scripts/menubar/mbp-tunnel.30s.sh" "$HOME/swiftbar/mbp-tunnel.30s.sh"
 ```
 
 Point SwiftBar at your plugins folder (e.g. `~/swiftbar`) in SwiftBar → Preferences.
@@ -93,6 +101,18 @@ CLI equivalents:
 pnpm start:bg   # start dev stack in background
 pnpm stop       # stop processes on :4242, :4243, :5173
 ```
+
+### Tunnel status (`mbp.thematrixofdestiny.com`)
+
+A second SwiftBar plugin ([`scripts/menubar/mbp-tunnel.30s.sh`](scripts/menubar/mbp-tunnel.30s.sh)) polls the public tunnel hostname every 30 seconds and checks whether `cloudflared` is running locally. Installed by `install.sh` above.
+
+| Icon | Meaning |
+|------|---------|
+| `:globe:` (green) | Tunnel reachable (HTTPS response from Cloudflare edge) |
+| `:icloud.and.arrow.up:` (orange) | `cloudflared` is running but the hostname is unreachable (HTTP 530) |
+| `:icloud.slash:` (gray) | Tunnel offline (`cloudflared` stopped and hostname unreachable) |
+
+Override the hostname with `TUNNEL_HOST` in the environment if needed.
 
 ## Ports
 

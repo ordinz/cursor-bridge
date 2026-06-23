@@ -1,6 +1,27 @@
 import type { Model, Project, Session } from "../lib/types";
 import { TelegramSend } from "./TelegramSend";
 
+const REMOTE_HEALTH_URL = "https://cursor-mcp-bridge.kairose.com/health";
+
+function ExternalLinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </svg>
+  );
+}
+
 interface OversightControlsProps {
   session: Session | null;
   project: string;
@@ -47,6 +68,16 @@ export function OversightControls({
         )}
         <div className="ml-auto flex items-center gap-2">
           <TelegramSend />
+          <a
+            href={REMOTE_HEALTH_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex min-h-11 items-center justify-center rounded-md border border-zinc-700 px-3 py-2 text-zinc-300 active:bg-zinc-900"
+            aria-label="Open remote health check"
+            data-testid="remote-health-link"
+          >
+            <ExternalLinkIcon className="h-4 w-4" />
+          </a>
           {running && (
             <button
               type="button"

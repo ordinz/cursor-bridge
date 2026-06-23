@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { sendTelegram } from "../lib/api";
 
 interface TelegramFormProps {
   configured: boolean;
   autoFocus?: boolean;
+  open?: boolean;
   showCancel?: boolean;
   onCancel?: () => void;
   onSent?: () => void;
@@ -12,10 +13,12 @@ interface TelegramFormProps {
 export function TelegramForm({
   configured,
   autoFocus = false,
+  open = true,
   showCancel = false,
   onCancel,
   onSent,
 }: TelegramFormProps) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -40,9 +43,18 @@ export function TelegramForm({
 
   const inputDisabled = !configured || sending;
 
+  useEffect(() => {
+    if (!open || !autoFocus) return;
+    const id = window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open, autoFocus]);
+
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <textarea
+        ref={inputRef}
         value={message}
         onChange={(e) => {
           setMessage(e.target.value);
