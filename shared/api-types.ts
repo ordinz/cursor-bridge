@@ -34,6 +34,23 @@ export interface ProjectsResponse {
   projects: Project[];
 }
 
+export interface DevStatus {
+  projectId: string;
+  capturing: boolean;
+  devServerReachable: boolean;
+  port: number | null;
+  lineCount: number;
+  logFile: string;
+  managedPid: number | null;
+  fileRecent?: boolean;
+}
+
+export interface DevLogsResponse {
+  lines: string[];
+  truncated: boolean;
+  source: "buffer" | "file" | "none";
+}
+
 export interface Model {
   id: string;
   displayName: string;

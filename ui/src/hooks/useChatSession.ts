@@ -282,7 +282,12 @@ export function useChatSession() {
   }, []);
 
   const sendPrompt = useCallback(
-    async (prompt: string, source = "manual", sessionOverride?: Session) => {
+    async (
+      prompt: string,
+      source = "manual",
+      sessionOverride?: Session,
+      options: { includeDevLogs?: boolean } = {},
+    ) => {
       const active = sessionOverride ?? session;
       if (!active) {
         throw new Error("No active session");
@@ -295,11 +300,10 @@ export function useChatSession() {
       abortRef.current = new AbortController();
 
       try {
-        const res = await postChat(
-          active.sessionId,
-          prompt,
-          source === "manual" ? "manual" : "api",
-        );
+        const res = await postChat(active.sessionId, prompt, {
+          source: source === "manual" ? "manual" : "api",
+          includeDevLogs: options.includeDevLogs,
+        });
 
         for await (const event of readSseStream(res)) {
           if (event.type === "session") {

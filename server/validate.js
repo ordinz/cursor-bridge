@@ -9,7 +9,7 @@ export class InvalidRequestError extends Error {
   }
 }
 
-export function validatePrompt(prompt) {
+export function validatePrompt(prompt, { maxLength = PROMPT_MAX_LENGTH } = {}) {
   if (prompt === undefined || prompt === null) {
     throw new InvalidRequestError("prompt is required");
   }
@@ -20,13 +20,24 @@ export function validatePrompt(prompt) {
   if (!trimmed) {
     throw new InvalidRequestError("prompt must not be empty");
   }
-  if (prompt.length > PROMPT_MAX_LENGTH) {
+  if (prompt.length > maxLength) {
     throw new InvalidRequestError(
-      `prompt exceeds maximum length of ${PROMPT_MAX_LENGTH} characters`,
+      `prompt exceeds maximum length of ${maxLength} characters`,
       "PROMPT_TOO_LONG",
     );
   }
   return trimmed;
+}
+
+export function validateCombinedPrompt(userPrompt, augmentedPrompt) {
+  validatePrompt(userPrompt);
+  if (augmentedPrompt.length > PROMPT_MAX_LENGTH) {
+    throw new InvalidRequestError(
+      `prompt with dev logs exceeds maximum length of ${PROMPT_MAX_LENGTH} characters`,
+      "PROMPT_TOO_LONG",
+    );
+  }
+  return augmentedPrompt;
 }
 
 export function validateProjectId(project) {

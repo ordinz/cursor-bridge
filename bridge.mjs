@@ -5,6 +5,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { SessionManager } from "./server/sessions.js";
 import { createRouter, handleLegacyPrompt } from "./server/routes.js";
+import {
+  ensureDevLogsDir,
+  stopAllManagedDevServers,
+} from "./server/dev-logs.js";
 import { PROJECTS_ROOT } from "./server/projects.js";
 import { mountMcpProxy } from "./server/mcp-proxy.js";
 import { blockPublicUi, localUiOnly } from "./server/tunnel-access.js";
@@ -50,6 +54,15 @@ app.get(/^(?!\/api)(?!\/telegram).*/, localUiOnly, (_req, res) => {
     }
   });
 });
+
+ensureDevLogsDir();
+
+function shutdown() {
+  stopAllManagedDevServers();
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 app.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);

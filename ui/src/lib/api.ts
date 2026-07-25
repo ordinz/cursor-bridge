@@ -1,6 +1,8 @@
 import type {
   AgentInfo,
   ApiErrorBody,
+  DevLogsResponse,
+  DevStatus,
   FeedItem,
   HealthResponse,
   Model,
@@ -42,6 +44,18 @@ export async function getHealth() {
 
 export async function getProjects() {
   return json<ProjectsResponse>("/api/projects");
+}
+
+export async function getDevStatus(projectId: string) {
+  return json<DevStatus>(
+    `/api/projects/${encodeURIComponent(projectId)}/dev-status`,
+  );
+}
+
+export async function getDevLogs(projectId: string, lines = 150) {
+  return json<DevLogsResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/dev-logs?lines=${lines}`,
+  );
 }
 
 export async function getModels() {

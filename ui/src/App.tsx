@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { getHealth } from "./lib/api";
-import type { HealthResponse } from "./lib/types";
+import { getHealth, getDevStatus } from "./lib/api";
+import type { DevStatus, HealthResponse } from "./lib/types";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { InstructionsPanel } from "./components/InstructionsPanel";
 import {
@@ -22,6 +22,7 @@ export default function App() {
     useModels();
   const [project, setProject] = useState("app");
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [devStatus, setDevStatus] = useState<DevStatus | null>(null);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("instructions");
 
   const apiOk = health?.ok ?? false;
@@ -67,6 +68,20 @@ export default function App() {
     }, 30_000);
     return () => window.clearInterval(interval);
   }, []);
+
+  const devStatusProject = session?.project ?? project;
+
+  useEffect(() => {
+    void getDevStatus(devStatusProject)
+      .then(setDevStatus)
+      .catch(() => setDevStatus(null));
+    const interval = window.setInterval(() => {
+      void getDevStatus(devStatusProject)
+        .then(setDevStatus)
+        .catch(() => setDevStatus(null));
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [devStatusProject]);
 
   useEffect(() => {
     if (runStatus === "running") {
@@ -131,13 +146,15 @@ export default function App() {
   );
 
   const handlePromptSend = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, options: { includeDevLogs: boolean }) => {
       let active = session;
       if (!active) {
         active = await startSession(project, selectedModel);
       }
       setMobilePanel("feed");
-      await sendPrompt(prompt, "manual", active);
+      await sendPrompt(prompt, "manual", active, {
+        includeDevLogs: options.includeDevLogs,
+      });
       void refreshAgents();
     },
     [session, project, selectedModel, startSession, sendPrompt, refreshAgents],
@@ -192,6 +209,7 @@ export default function App() {
       <PromptInput
         disabled={!apiOk || !cursorReady || running}
         running={running}
+        devStatus={devStatus}
         onSend={handlePromptSend}
       />
     </>

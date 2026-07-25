@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ensureDevLogsDir } from "./dev-logs.js";
 import { serializeSdkEvent, streamRun } from "./stream.js";
 import {
   seedIdleSession,
@@ -221,6 +225,8 @@ test("openapi.json describes core routes", async () => {
     assert.ok(spec.paths["/sessions/{id}"]);
     assert.ok(spec.paths["/sessions/{id}/events"]);
     assert.ok(spec.paths["/sessions"]);
+    assert.ok(spec.paths["/projects/{projectId}/dev-status"]);
+    assert.ok(spec.paths["/projects/{projectId}/dev-logs"]);
     assert.ok(spec.paths["/sessions/{id}/chat"]);
     assert.ok(spec.paths["/sessions/{id}/cancel"]);
   });
@@ -263,6 +269,46 @@ async function readSseUntil(
 
   return events;
 }
+
+test("chat with includeDevLogs emits DEV_LOGS status when logs present", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-dev-logs-route-"));
+  const previous = process.env.CURSOR_BRIDGE_DEV_LOGS_DIR;
+  process.env.CURSOR_BRIDGE_DEV_LOGS_DIR = dir;
+
+  try {
+    await withTestServer(async ({ sessions, base }) => {
+      const id = seedIdleSession(sessions);
+      ensureDevLogsDir();
+      const logPath = path.join(dir, "app.log");
+      fs.writeFileSync(logPath, "compile error in route.ts\n");
+
+    const events = await readSseUntil(
+      await fetch(`${base}/sessions/${id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "Fix compile error", includeDevLogs: true }),
+      }),
+      (event) => event.type === "done" || event.type === "error",
+    );
+
+    const devLogsStatus = events.find(
+      (e) => e.type === "status" && e.status === "DEV_LOGS",
+    );
+    assert.ok(devLogsStatus);
+    assert.match(devLogsStatus.message, /Included 1 lines of dev server logs/);
+
+    const userEvent = events.find((e) => e.type === "user");
+    assert.equal(userEvent.text, "Fix compile error");
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CURSOR_BRIDGE_DEV_LOGS_DIR;
+    } else {
+      process.env.CURSOR_BRIDGE_DEV_LOGS_DIR = previous;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("watch stream receives chat events", async () => {
   await withTestServer(async ({ sessions, base }) => {

@@ -27,7 +27,16 @@ import {
   TelegramSendError,
 } from "./telegram.js";
 import {
+  buildPromptWithDevLogs,
+  DevLogsError,
+  getDevStatus,
+  getRecentLogs,
+  startDevServer,
+  stopDevServer,
+} from "./dev-logs.js";
+import {
   InvalidRequestError,
+  validateCombinedPrompt,
   validateProjectId,
   validatePrompt,
   validateSessionId,
@@ -82,6 +91,51 @@ export function createRouter(sessions) {
         canCreateSession: true,
       })),
     });
+  });
+
+  router.get("/projects/:projectId/dev-status", async (req, res, next) => {
+    try {
+      const projectId = validateProjectId(req.params.projectId);
+      resolveProject(projectId);
+      const status = await getDevStatus(projectId);
+      res.json(status);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/projects/:projectId/dev-logs", async (req, res, next) => {
+    try {
+      const projectId = validateProjectId(req.params.projectId);
+      resolveProject(projectId);
+      const lines = Math.min(
+        Math.max(Number(req.query.lines) || 150, 1),
+        500,
+      );
+      const logs = await getRecentLogs(projectId, { lines });
+      res.json(logs);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/projects/:projectId/dev-server", async (req, res, next) => {
+    try {
+      const projectId = validateProjectId(req.params.projectId);
+      resolveProject(projectId);
+      const action = req.body?.action;
+      if (action === "start") {
+        const result = await startDevServer(projectId);
+        return res.json(result);
+      }
+      if (action === "stop") {
+        const result = await stopDevServer(projectId);
+        return res.json(result);
+      }
+      throw new InvalidRequestError('action must be "start" or "stop"');
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get("/models", async (_req, res, next) => {
@@ -203,11 +257,11 @@ export function createRouter(sessions) {
   });
 
   router.post("/sessions/:id/chat", async (req, res, next) => {
-    const { allowOverlap = false } = req.body ?? {};
+    const { allowOverlap = false, includeDevLogs = false } = req.body ?? {};
 
     try {
       const id = validateSessionId(req.params.id);
-      const prompt = validatePrompt(req.body?.prompt);
+      const userPrompt = validatePrompt(req.body?.prompt);
 
       let record;
       if (allowOverlap) {
@@ -219,15 +273,30 @@ export function createRouter(sessions) {
         record = sessions.assertCanChat(id);
       }
 
+      let agentPrompt = userPrompt;
+      let devLogsMeta = null;
+      if (includeDevLogs) {
+        const augmented = await buildPromptWithDevLogs(
+          record.project,
+          userPrompt,
+        );
+        agentPrompt = validateCombinedPrompt(userPrompt, augmented.prompt);
+        devLogsMeta = {
+          logsAttached: augmented.logsAttached,
+          logLineCount: augmented.logLineCount,
+          source: augmented.source,
+        };
+      }
+
       setupSse(res);
 
       try {
         if (!record.namedFromPrompt) {
-          sessions.setInterimName(id, nameFromPrompt(prompt));
+          sessions.setInterimName(id, nameFromPrompt(userPrompt));
           record = sessions.get(id);
         }
 
-        sessions.notePrompt(id, prompt);
+        sessions.notePrompt(id, userPrompt);
         sessions.startRunEvents(id);
 
         const source = req.body?.source === "manual" ? "manual" : "api";
@@ -251,12 +320,24 @@ export function createRouter(sessions) {
           }),
         );
 
+        if (devLogsMeta) {
+          const config = devLogsMeta.logsAttached
+            ? `Included ${devLogsMeta.logLineCount} lines of dev server logs from ${record.project} (source: ${devLogsMeta.source})`
+            : `No dev server logs available for ${record.project} — start dev with log capture or pipe output to ~/.cursor-bridge/dev-logs/${record.project}.log`;
+          publish(
+            createSseEvent("status", id, {
+              status: "DEV_LOGS",
+              message: config,
+            }),
+          );
+        }
+
         publish(
-          createSseEvent("user", id, { text: prompt, source }),
+          createSseEvent("user", id, { text: userPrompt, source }),
         );
 
         const abortController = new AbortController();
-        const run = await record.agent.send(prompt);
+        const run = await record.agent.send(agentPrompt);
         sessions.setActiveRun(id, run, abortController);
 
         const outcome = await streamRun(res, run, {
@@ -286,7 +367,7 @@ export function createRouter(sessions) {
                 agentId: snapshot.agentId,
                 project: snapshot.project,
                 cwd: snapshot.cwd,
-                prompt,
+                prompt: userPrompt,
                 assistantSnippet: snapshot.lastAssistantSnippet,
               });
             }
@@ -375,6 +456,8 @@ export function createRouter(sessions) {
                 : err instanceof TelegramNotConfiguredError
                   ? err.status
                   : err instanceof TelegramSendError
+                  ? err.status
+                  : err instanceof DevLogsError
                     ? err.status
                     : 500;
     res.status(status).json(errorBody(err));

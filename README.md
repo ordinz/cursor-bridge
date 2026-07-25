@@ -194,8 +194,30 @@ Returns `{ sessionId, agentId, project, cwd, model, runStatus }`.
 ### `POST /api/sessions/:id/chat` (SSE)
 
 ```json
-{ "prompt": "Explain this repo" }
+{ "prompt": "Explain this repo", "includeDevLogs": false }
 ```
+
+When `includeDevLogs` is `true`, recent local dev server output for the session project is prepended to the agent prompt. The SSE `user` event still shows the original prompt text.
+
+## Local dev server logs
+
+The oversight UI includes an **Include dev logs** checkbox on the prompt form. When checked, the bridge prepends recent output from the project's local `pnpm dev` server (`app` on `:3000`, `www` on `:3001`).
+
+**`app` and `www` write logs automatically.** Their `pnpm dev` scripts tee stdout/stderr to `~/.cursor-bridge/dev-logs/{project}.log`. Just run `pnpm dev` as usual.
+
+The bridge can also start a managed dev server (optional fallback):
+
+```bash
+curl -X POST http://127.0.0.1:4242/api/projects/app/dev-server \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"start"}'
+```
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/projects/:id/dev-status` | Port reachability + log capture status |
+| `GET /api/projects/:id/dev-logs?lines=150` | Preview recent log lines |
+| `POST /api/projects/:id/dev-server` | `{ "action": "start" \| "stop" }` bridge-managed dev |
 
 SSE events:
 

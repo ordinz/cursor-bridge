@@ -147,6 +147,112 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
           },
         },
       },
+      "/projects/{projectId}/dev-status": {
+        get: {
+          operationId: "getDevStatus",
+          summary: "Local dev server reachability and log capture status",
+          parameters: [
+            {
+              name: "projectId",
+              in: "path",
+              required: true,
+              schema: { type: "string", example: "app" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "OK",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      projectId: { type: "string" },
+                      capturing: { type: "boolean" },
+                      devServerReachable: { type: "boolean" },
+                      port: { type: "integer", nullable: true },
+                      lineCount: { type: "integer" },
+                      logFile: { type: "string" },
+                      managedPid: { type: "integer", nullable: true },
+                      fileRecent: { type: "boolean" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/projects/{projectId}/dev-logs": {
+        get: {
+          operationId: "getDevLogs",
+          summary: "Preview recent local dev server log lines",
+          parameters: [
+            {
+              name: "projectId",
+              in: "path",
+              required: true,
+              schema: { type: "string", example: "app" },
+            },
+            {
+              name: "lines",
+              in: "query",
+              schema: { type: "integer", default: 150, maximum: 500 },
+            },
+          ],
+          responses: {
+            200: {
+              description: "OK",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      lines: { type: "array", items: { type: "string" } },
+                      truncated: { type: "boolean" },
+                      source: {
+                        type: "string",
+                        enum: ["buffer", "file", "none"],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/projects/{projectId}/dev-server": {
+        post: {
+          operationId: "controlDevServer",
+          summary: "Start or stop a bridge-managed dev server with log capture",
+          parameters: [
+            {
+              name: "projectId",
+              in: "path",
+              required: true,
+              schema: { type: "string", example: "app" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["action"],
+                  properties: {
+                    action: { type: "string", enum: ["start", "stop"] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "OK" },
+          },
+        },
+      },
       "/sessions/{id}": {
         get: {
           operationId: "getSession",
@@ -286,6 +392,12 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
                       type: "string",
                       enum: ["api", "manual"],
                       default: "api",
+                    },
+                    includeDevLogs: {
+                      type: "boolean",
+                      default: false,
+                      description:
+                        "When true, prepend recent local dev server logs for the session project to the agent prompt.",
                     },
                   },
                 },

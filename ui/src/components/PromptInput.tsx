@@ -1,21 +1,61 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { DevStatus } from "../lib/types";
+
+const INCLUDE_LOGS_KEY = "cursor-bridge-include-dev-logs-v1";
 
 interface PromptInputProps {
   disabled: boolean;
   running: boolean;
-  onSend: (prompt: string) => Promise<void>;
+  devStatus: DevStatus | null;
+  onSend: (prompt: string, options: { includeDevLogs: boolean }) => Promise<void>;
 }
 
-export function PromptInput({ disabled, running, onSend }: PromptInputProps) {
+function devStatusHint(status: DevStatus | null): string {
+  if (!status?.port) return "Dev log status unavailable";
+  if (status.capturing) {
+    if (status.lineCount > 0) {
+      return `${status.lineCount} lines buffered`;
+    }
+    if (status.fileRecent) {
+      return `Log file active at ${status.logFile}`;
+    }
+  }
+  if (status.devServerReachable) {
+    return `Dev running on :${status.port} — restart with pnpm dev to capture logs`;
+  }
+  return `No dev server on :${status.port}`;
+}
+
+export function PromptInput({
+  disabled,
+  running,
+  devStatus,
+  onSend,
+}: PromptInputProps) {
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
+  const [includeDevLogs, setIncludeDevLogs] = useState(() => {
+    try {
+      return localStorage.getItem(INCLUDE_LOGS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(INCLUDE_LOGS_KEY, String(includeDevLogs));
+    } catch {
+      // ignore storage errors
+    }
+  }, [includeDevLogs]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!prompt.trim() || disabled || sending) return;
     setSending(true);
     try {
-      await onSend(prompt.trim());
+      await onSend(prompt.trim(), { includeDevLogs });
       setPrompt("");
     } finally {
       setSending(false);
@@ -23,6 +63,13 @@ export function PromptInput({ disabled, running, onSend }: PromptInputProps) {
   }
 
   const inputDisabled = disabled || sending;
+  const hint = devStatusHint(devStatus);
+  const hintClass =
+    devStatus?.capturing && (devStatus.lineCount > 0 || devStatus.fileRecent)
+      ? "text-zinc-500"
+      : devStatus?.devServerReachable
+        ? "text-amber-400/90"
+        : "text-zinc-500";
 
   return (
     <form
@@ -46,6 +93,20 @@ export function PromptInput({ disabled, running, onSend }: PromptInputProps) {
           Agent is working — wait or press Stop to send another prompt.
         </p>
       )}
+      <label className="mb-2 flex items-start gap-2 text-xs text-zinc-400">
+        <input
+          type="checkbox"
+          checked={includeDevLogs}
+          onChange={(e) => setIncludeDevLogs(e.target.checked)}
+          disabled={inputDisabled}
+          className="mt-0.5"
+          data-testid="include-dev-logs"
+        />
+        <span>
+          <span className="text-zinc-300">Include dev logs</span>
+          <span className={`mt-0.5 block ${hintClass}`}>{hint}</span>
+        </span>
+      </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <textarea
           id="prompt-input"

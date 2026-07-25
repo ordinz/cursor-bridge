@@ -1,6 +1,8 @@
 export type {
   AgentInfo,
   ApiErrorBody,
+  DevLogsResponse,
+  DevStatus,
   FeedItem,
   FeedItemSource,
   HealthResponse,
@@ -11,4 +13,5 @@ export type {
   Session,
   SseEnvelope,
   SseEvent,
+  TelegramSendResponse,
 } from "../../../shared/api-types";
