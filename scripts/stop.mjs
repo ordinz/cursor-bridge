@@ -1,44 +1,66 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PORTS,
+  ROOT,
+  alive,
+  killPid,
+  pidsOnPort,
+  stopWatchdog,
+} from "./process-utils.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORTS = [4242, 4243, 5173];
+const keepWatchdog = process.argv.includes("--keep-watchdog");
 
-function pidsOnPort(port) {
-  try {
-    return execSync(`lsof -tiTCP:${port} -sTCP:LISTEN`, { encoding: "utf8" })
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function killPids(pids, label) {
+function killPids(pids, signal, label) {
   for (const pid of pids) {
-    try {
-      process.kill(Number(pid), "SIGTERM");
-      console.log(`cursor-bridge: stopped pid ${pid} (${label})`);
-    } catch {
-      // process may have already exited
+    if (killPid(pid, signal)) {
+      console.log(`cursor-bridge: sent ${signal} to pid ${pid} (${label})`);
     }
   }
 }
 
-for (const port of PORTS) {
-  killPids(pidsOnPort(port), `port ${port}`);
+async function stop() {
+  if (!keepWatchdog) {
+    await stopWatchdog();
+  }
+
+  const seen = new Set();
+
+  for (const port of PORTS) {
+    for (const pid of pidsOnPort(port)) {
+      seen.add(pid);
+      killPids([pid], "SIGTERM", `port ${port}`);
+    }
+  }
+
+  try {
+    const supervisors = execFileSync(
+      "pgrep",
+      ["-f", join(ROOT, "scripts/run.mjs")],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    for (const pid of supervisors) {
+      seen.add(pid);
+      killPids([pid], "SIGTERM", "supervisor");
+    }
+  } catch {
+    // no supervisor
+  }
+
+  await new Promise((r) => setTimeout(r, 800));
+
+  for (const pid of seen) {
+    if (alive(pid)) killPids([pid], "SIGKILL", "stubborn");
+  }
+
+  for (const port of PORTS) {
+    const leftover = pidsOnPort(port);
+    if (leftover.length) killPids(leftover, "SIGKILL", `port ${port}`);
+  }
 }
 
-try {
-  const supervisors = execSync(`pgrep -f "${join(ROOT, "scripts/run.mjs")}"`, {
-    encoding: "utf8",
-  })
-    .trim()
-    .split("\n")
-    .filter(Boolean);
-  killPids(supervisors, "supervisor");
-} catch {
-  // no supervisor running
-}
+await stop();

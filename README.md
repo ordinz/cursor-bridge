@@ -36,7 +36,7 @@ pnpm bridge
 
 ## Oversight UI
 
-The oversight UI is a React agent console for sending prompts and watching agents work. Open it at **http://localhost:5173** in dev (`pnpm start`) or **http://127.0.0.1:4242** in prod (`pnpm start -- --prod`).
+The oversight UI is a React agent console for sending prompts and watching agents work. Open it at **http://127.0.0.1:5173** in dev (`pnpm start`) or **http://127.0.0.1:4242** in prod (`pnpm start -- --prod`).
 
 **If you are on this page, use the Prompt form — not MCP.** MCP is a separate integration path for Cursor IDE agents.
 
@@ -53,7 +53,7 @@ Tool calls are hidden by default in the conversation feed; toggle **Show tool ca
 
 ## Menu bar (macOS)
 
-Run cursor-bridge from the menu bar with [SwiftBar](https://swiftbar.app). The plugin lives at [`scripts/menubar/cursor-bridge.10s.sh`](scripts/menubar/cursor-bridge.10s.sh) and polls `GET /api/health` every 10 seconds.
+Run cursor-bridge from the menu bar with [SwiftBar](https://swiftbar.app). The plugin lives at [`scripts/menubar/cursor-bridge.10s.sh`](scripts/menubar/cursor-bridge.10s.sh) and polls API + UI health every 10 seconds.
 
 **Install**
 
@@ -77,20 +77,24 @@ Point SwiftBar at your plugins folder (e.g. `~/swiftbar`) in SwiftBar → Prefer
 
 | Icon | Meaning |
 |------|---------|
-| 🟢 | Bridge is up, no agent runs in progress |
-| 🟡 | Bridge is up and at least one agent is actively running |
+| 🟢 | API + UI up, no agent runs in progress |
+| 🟡 | API + UI up and at least one agent is actively running |
+| 🟠 | API up but UI down (orphaned bridge — watchdog should heal this) |
 | ⚫ | Stopped |
 
-The plugin polls `/api/health` every 10 seconds. Rename the file to `cursor-bridge.3s.sh` (and update the symlink) for faster yellow/green transitions when agents start and finish.
+**Watchdog:** `pnpm start:bg` (and menu **Start**) also launches a background healer that checks API + UI every 3 minutes and restarts the stack if Vite or the supervisor dies while the API orphan stays up. **Stop** kills the watchdog too. Logs: `/tmp/cursor-bridge-watchdog.log`.
+
+The plugin polls every 10 seconds. Rename the file to `cursor-bridge.3s.sh` (and update the symlink) for faster yellow/green transitions when agents start and finish.
 
 **Menu actions**
 
 | Action | What it does |
 |--------|----------------|
-| **Start** | Launch dev stack in background (`pnpm start` via `start-bg.sh`) |
-| **Stop** | Stop listeners on `:4242`, `:4243`, `:5173` and the supervisor |
-| **Open UI** | Open the oversight dashboard at `http://localhost:5173` |
+| **Start** | Launch detached dev stack + watchdog (`start-bg.sh`) |
+| **Stop** | Stop listeners on `:4242`, `:4243`, `:5173`, supervisor, and watchdog |
+| **Open UI** | Open the oversight dashboard at `http://127.0.0.1:5173` |
 | **View log** | Open `/tmp/cursor-bridge.log` |
+| **Watchdog log** | Open `/tmp/cursor-bridge-watchdog.log` |
 | **GitHub** | Open the [cursor-bridge repo](https://github.com/ordinz/cursor-bridge) |
 | **Cloudflare tunnel** | Open [tunnel routes](https://dash.cloudflare.com/5a4fdf7e9a52050c3677ebe502a344d0/tunnels/e98e39df-8b06-4379-b390-a372472284e9/routes) in the Cloudflare dashboard |
 | **Refresh** | Re-poll health immediately |
@@ -98,8 +102,9 @@ The plugin polls `/api/health` every 10 seconds. Rename the file to `cursor-brid
 CLI equivalents:
 
 ```bash
-pnpm start:bg   # start dev stack in background
-pnpm stop       # stop processes on :4242, :4243, :5173
+pnpm start:bg   # start detached stack + watchdog
+pnpm stop       # stop stack + watchdog
+pnpm watchdog   # run healer in the foreground (usually unnecessary)
 ```
 
 ### Tunnel status (`mbp.thematrixofdestiny.com`)
@@ -113,6 +118,97 @@ A second SwiftBar plugin ([`scripts/menubar/mbp-tunnel.30s.sh`](scripts/menubar/
 | `:icloud.slash:` (gray) | Tunnel offline (`cloudflared` stopped and hostname unreachable) |
 
 Override the hostname with `TUNNEL_HOST` in the environment if needed.
+
+## Telegram phone console (`Cursor Bridge` forum)
+
+Remote operator console over Telegram. Default **off** so laptop work does not stream to your phone until you send `/phone on`.
+
+### Cloudflare hostname (dedicated — do not use `mbp`)
+
+`mbp.thematrixofdestiny.com` stays on the Next app (`:3000`). MCP stays on its existing published app:
+
+| Hostname | Service |
+|----------|---------|
+| `cursor-mcp-bridge.kairose.com` | `http://127.0.0.1:4243` (MCP — unchanged) |
+| `cursor-bridge.kairose.com` | `http://127.0.0.1:4242` (**add this** — API + Telegram webhook) |
+| `mbp.thematrixofdestiny.com` | `http://localhost:3000` (app — unchanged) |
+
+In Cloudflare Zero Trust → Networks → Tunnels → your tunnel → **Published application routes**, add:
+
+- **Hostname:** `cursor-bridge.kairose.com`
+- **Service:** `http://127.0.0.1:4242`
+
+DNS for `*.kairose.com` should already be on this tunnel (same as MCP).
+
+Webhook URL:
+
+`https://cursor-bridge.kairose.com/cursor-bridge/telegram/webhook`
+
+### One-time group setup
+
+1. Create a private Telegram group named **`Cursor Bridge`**.
+2. Enable **Topics** (forum mode) in group settings.
+3. Create three topics: **`Status`**, **`app`**, **`www`**.
+4. Add your bot (same `TELEGRAM_BOT_TOKEN` as outbound notify, **not** the Matrix support-chat bot).
+5. Make the bot an admin with **Manage topics** + **Post messages**.
+6. In BotFather → your bot → **Group Privacy → Turn off** (so free-text prompts are visible).
+7. Post a message in each topic, then run:
+
+```bash
+pnpm telegram:setup-topics
+```
+
+Copy `TELEGRAM_CHAT_ID` and `TELEGRAM_TOPIC_STATUS` / `_APP` / `_WWW` into `.env`. Generate a webhook secret:
+
+```bash
+openssl rand -hex 24   # → TELEGRAM_WEBHOOK_SECRET
+```
+
+Optional: `TELEGRAM_ALLOWED_USER_IDS` = your numeric user id.
+
+Also set:
+
+```bash
+TELEGRAM_TUNNEL_HOST=cursor-bridge.kairose.com
+# or full override:
+# TELEGRAM_WEBHOOK_PUBLIC_URL=https://cursor-bridge.kairose.com/cursor-bridge/telegram/webhook
+```
+
+8. Start the bridge, then:
+
+```bash
+pnpm telegram:set-webhook
+```
+
+### Commands
+
+| Command | Effect |
+|---------|--------|
+| `/phone_on` | Enable prompts + live draft streaming to Telegram |
+| `/phone_off` | Disable sync (default) |
+| `/status` | Health, sessions, phone mode |
+| `/stop` | Cancel active run(s) for this topic’s project (or all from Status) |
+| `/new` | Fresh session in `app` / `www` topic |
+| `/help` | List commands |
+
+Also accepted when typed: `/phone on` · `/phone off`.
+
+Slash-menu preview is registered via Bot API `setMyCommands` (on bridge boot, or manually):
+
+```bash
+pnpm telegram:set-commands
+```
+
+If `/` still shows nothing, force-quit Telegram and reopen, or run the command above after changing the bot token.
+
+Plain text in **app** / **www** while phone mode is on becomes a Cursor prompt. Replies stream via rich drafts when available, then persist as one rich HTML message.
+
+### Smoke test
+
+1. Status topic → `/status` or `/help`
+2. `/phone_on`
+3. app topic → short prompt → draft then final message
+4. `/phone_off`
 
 ## Ports
 
@@ -253,9 +349,20 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 | `PROJECTS_ROOT` | `~/dev/mx/https` | Project allowlist root |
 | `ENABLED_PROJECTS` | `www,app` | Comma-separated projects selectable for new sessions |
 | `SESSION_IDLE_MS` | `1800000` | Session idle timeout (30 min) |
+| `TELEGRAM_BOT_TOKEN` | — | Bot token (outbound + phone console) |
+| `TELEGRAM_CHAT_ID` | — | `Cursor Bridge` forum group id |
+| `TELEGRAM_WEBHOOK_SECRET` | — | Webhook `secret_token` / header check |
+| `TELEGRAM_TOPIC_STATUS` | — | Status topic `message_thread_id` |
+| `TELEGRAM_TOPIC_APP` | — | app topic thread id |
+| `TELEGRAM_TOPIC_WWW` | — | www topic thread id |
+| `TELEGRAM_ALLOWED_USER_IDS` | — | Optional allowlist (comma-separated) |
+| `TELEGRAM_WEBHOOK_PUBLIC_URL` | derived from `TELEGRAM_TUNNEL_HOST` | Full webhook URL |
+| `TELEGRAM_TUNNEL_HOST` | `cursor-bridge.kairose.com` | Dedicated Cloudflare hostname → `:4242` |
+| `TUNNEL_HOST` | `mbp.thematrixofdestiny.com` | SwiftBar app-tunnel poller only |
+| `TELEGRAM_SET_WEBHOOK_ON_BOOT` | `1` | Set `0` to skip auto `setWebhook` |
 
 ## Security
 
 Localhost-only bind by default. Do not expose publicly without `MCP_API_KEY` — the bridge runs Cursor agents with filesystem access using your API key.
 
-**Remote access (tunnel hostname):** all routes require `Authorization: Bearer <MCP_API_KEY>` (or `X-API-Key`). **Localhost stays open** for local dev (`pnpm start`, UI, MCP on `:4243`). The oversight UI is never served on tunnel hostnames.
+**Remote access (tunnel hostname):** all routes require `Authorization: Bearer <MCP_API_KEY>` (or `X-API-Key`), except `POST /cursor-bridge/telegram/webhook` which uses `X-Telegram-Bot-Api-Secret-Token`. **Localhost stays open** for local dev (`pnpm start`, UI, MCP on `:4243`). The oversight UI is never served on tunnel hostnames.

@@ -95,29 +95,19 @@ export function startHeartbeat(res, intervalMs = HEARTBEAT_INTERVAL_MS) {
 }
 
 /**
- * Stream SDK run events over SSE.
- * - Emits `: heartbeat` comments every 15s
- * - On success: exactly one `done` event
- * - On failure: one `error` event (no `done`)
- * - On cancel: `status` + one `done` with status cancelled
+ * Consume an SDK run and emit normalized SSE payloads via callbacks.
+ * No HTTP/SSE transport — used by oversight chat and Telegram operator.
  */
-export async function streamRun(
-  res,
+export async function consumeRun(
   run,
-  { sessionId, onEvent, signal, publish } = {},
+  { sessionId, onEvent, signal } = {},
 ) {
-  const heartbeat = startHeartbeat(res);
   let doneEmitted = false;
   let errorEmitted = false;
 
   const emit = (payload) => {
     if (!payload) return;
     onEvent?.(payload);
-    if (publish) {
-      publish(payload);
-    } else if (!res.writableEnded) {
-      writeSse(res, payload);
-    }
   };
 
   const emitDone = (fields) => {
@@ -189,6 +179,36 @@ export async function streamRun(
   } catch (err) {
     emitError(err.message ?? "Run failed", "RUN_FAILED");
     return { result: null, done: null, failed: true };
+  }
+}
+
+/**
+ * Stream SDK run events over SSE.
+ * - Emits `: heartbeat` comments every 15s
+ * - On success: exactly one `done` event
+ * - On failure: one `error` event (no `done`)
+ * - On cancel: `status` + one `done` with status cancelled
+ */
+export async function streamRun(
+  res,
+  run,
+  { sessionId, onEvent, signal, publish } = {},
+) {
+  const heartbeat = startHeartbeat(res);
+
+  try {
+    return await consumeRun(run, {
+      sessionId,
+      signal,
+      onEvent: (payload) => {
+        onEvent?.(payload);
+        if (publish) {
+          publish(payload);
+        } else if (!res.writableEnded) {
+          writeSse(res, payload);
+        }
+      },
+    });
   } finally {
     clearInterval(heartbeat);
   }

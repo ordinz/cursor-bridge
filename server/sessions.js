@@ -41,6 +41,27 @@ export class SessionManager {
     return [...this.sessions.values()].map(toPublicSession);
   }
 
+  /** Latest in-memory session for a project, or null. */
+  findLatestForProject(project) {
+    let best = null;
+    for (const record of this.sessions.values()) {
+      if (record.project !== project) continue;
+      if (!best || record.lastActivityAt > best.lastActivityAt) {
+        best = record;
+      }
+    }
+    return best ? toSessionDetail(best) : null;
+  }
+
+  /** Active (running) sessions, optionally filtered by project. */
+  listActiveRuns(project = null) {
+    return this.list().filter(
+      (s) =>
+        s.runActive &&
+        (project == null || s.project === project),
+    );
+  }
+
   getDetail(sessionId) {
     const record = this.get(sessionId);
     if (!record) return null;

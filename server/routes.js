@@ -22,10 +22,12 @@ import { setupSse, startHeartbeat, streamRun } from "./stream.js";
 import { VERSION } from "./version.js";
 import {
   isTelegramConfigured,
+  isTelegramWebhookConfigured,
   sendTelegramMessage,
   TelegramNotConfiguredError,
   TelegramSendError,
 } from "./telegram.js";
+import { getPhoneModeState } from "./telegram-phone.js";
 import {
   buildPromptWithDevLogs,
   DevLogsError,
@@ -76,6 +78,8 @@ export function createRouter(sessions) {
         },
         telegram: {
           configured: isTelegramConfigured(),
+          webhookConfigured: isTelegramWebhookConfigured(),
+          phoneMode: getPhoneModeState().phoneMode,
         },
       });
     } catch (err) {

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanEnv } from "./process-utils.mjs";
 
 const prod = process.argv.includes("--prod");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -10,7 +11,7 @@ const mcpEntry = join(root, "mcp/dist/index.js");
 function run(command, args) {
   return spawn(command, args, {
     stdio: "inherit",
-    env: process.env,
+    env: cleanEnv(),
     cwd: root,
   });
 }
@@ -31,8 +32,17 @@ async function ensureMcpBuilt() {
 }
 
 function supervise(procs) {
+  let shuttingDown = false;
   const shutdown = () => {
-    for (const proc of procs) proc.kill("SIGTERM");
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const proc of procs) {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    }
   };
 
   process.on("SIGINT", shutdown);
@@ -40,6 +50,7 @@ function supervise(procs) {
 
   for (const proc of procs) {
     proc.on("exit", (code) => {
+      if (shuttingDown) return;
       shutdown();
       process.exit(code ?? 0);
     });
@@ -58,7 +69,7 @@ if (prod) {
 } else {
   console.log("cursor-bridge: dev mode");
   console.log("  API  → http://127.0.0.1:4242/api/*");
-  console.log("  UI   → http://localhost:5173 (HMR)");
+  console.log("  UI   → http://127.0.0.1:5173 (HMR)");
   console.log("  MCP  → http://127.0.0.1:4243/mcp");
   console.log("  prod → pnpm start -- --prod\n");
   supervise([

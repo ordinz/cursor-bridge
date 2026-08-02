@@ -7,6 +7,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/sse",
   "/messages",
   "/prompt",
+  "/cursor-bridge",
 ];
 
 export function isLocalHost(req) {

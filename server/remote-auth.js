@@ -25,6 +25,15 @@ export function matchesApiKey(req, expected) {
 
 /** Require API key for any non-localhost request. Localhost stays open for dev. */
 export function requireRemoteApiKey(req, res, next) {
+  // Telegram webhook uses its own secret header — not Bearer API key.
+  if (
+    req.path === "/cursor-bridge/telegram/webhook" ||
+    req.path.startsWith("/cursor-bridge/telegram/webhook")
+  ) {
+    next();
+    return;
+  }
+
   if (isLocalHost(req)) {
     next();
     return;

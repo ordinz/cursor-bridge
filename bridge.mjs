@@ -13,6 +13,10 @@ import { PROJECTS_ROOT } from "./server/projects.js";
 import { mountMcpProxy } from "./server/mcp-proxy.js";
 import { blockPublicUi, localUiOnly } from "./server/tunnel-access.js";
 import { requireRemoteApiKey } from "./server/remote-auth.js";
+import {
+  createTelegramWebhookHandler,
+  maybeSetTelegramWebhookOnBoot,
+} from "./server/telegram-operator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4242);
@@ -24,7 +28,12 @@ const sessions = new SessionManager();
 app.use(cors());
 app.use(requireRemoteApiKey);
 mountMcpProxy(app);
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+
+app.post(
+  "/cursor-bridge/telegram/webhook",
+  createTelegramWebhookHandler(sessions),
+);
 
 app.use("/api", createRouter(sessions));
 
@@ -47,7 +56,7 @@ app.use(blockPublicUi);
 const examplesDir = path.join(__dirname, "examples");
 app.use("/examples", localUiOnly, express.static(examplesDir));
 app.use(localUiOnly, express.static(uiDist));
-app.get(/^(?!\/api)(?!\/telegram).*/, localUiOnly, (_req, res) => {
+app.get(/^(?!\/api)(?!\/telegram)(?!\/cursor-bridge).*/, localUiOnly, (_req, res) => {
   res.sendFile(path.join(uiDist, "index.html"), (err) => {
     if (err) {
       res.status(200).send(`<!DOCTYPE html><html><body><h1>cursor-bridge</h1><p>API running. Build UI with <code>npm run build</code>.</p></body></html>`);
@@ -67,4 +76,5 @@ process.on("SIGTERM", shutdown);
 app.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);
   console.log(`📁 Projects root: ${PROJECTS_ROOT}`);
+  void maybeSetTelegramWebhookOnBoot();
 });

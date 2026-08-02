@@ -19,6 +19,8 @@ export interface HealthResponse {
   };
   telegram: {
     configured: boolean;
+    webhookConfigured?: boolean;
+    phoneMode?: boolean;
   };
 }
 
