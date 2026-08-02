@@ -362,9 +362,12 @@ export async function setTelegramWebhook(opts = {}) {
  * Keep in sync with handleCommand in telegram-operator.js.
  */
 export const TELEGRAM_BOT_COMMANDS = [
-  { command: "phone_on", description: "Enable phone mode (sync + prompts)" },
-  { command: "phone_off", description: "Disable phone mode" },
-  { command: "status", description: "Bridge health, sessions, phone mode" },
+  {
+    command: "phone_on",
+    description: "Mirror Cursor Agents → Telegram + enable prompts",
+  },
+  { command: "phone_off", description: "Stop IDE mirror + phone prompts" },
+  { command: "status", description: "Health, sessions, IDE mirror" },
   { command: "stop", description: "Cancel active Cursor run(s)" },
   { command: "new", description: "New session in this project topic" },
   { command: "help", description: "List commands" },

@@ -17,6 +17,8 @@ import {
   createTelegramWebhookHandler,
   maybeSetTelegramWebhookOnBoot,
 } from "./server/telegram-operator.js";
+import { startIdeAgentMirror } from "./server/telegram-ide-mirror.js";
+import { isPhoneModeOn } from "./server/telegram-phone.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4242);
@@ -77,4 +79,13 @@ app.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);
   console.log(`📁 Projects root: ${PROJECTS_ROOT}`);
   void maybeSetTelegramWebhookOnBoot();
+  if (isPhoneModeOn()) {
+    console.log("📲 phone mode already ON — starting IDE agent mirror");
+    void startIdeAgentMirror(sessions).catch((err) => {
+      console.warn(
+        "[ide-mirror] boot start failed:",
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
 });

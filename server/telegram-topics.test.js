@@ -4,6 +4,7 @@ import {
   _registerBindingForTests,
   _resetTelegramTopicStoreForTests,
   formatAgentTopicName,
+  getBindingByAgentId,
   getBindingBySessionId,
   getBindingByThreadId,
   resolveTelegramThread,
@@ -70,6 +71,7 @@ test("resolveTelegramThread maps dynamic agent bindings", () => {
   assert.equal(resolved.binding?.sessionId, "sess-1");
   assert.equal(getBindingByThreadId(777)?.project, "admin");
   assert.equal(getBindingBySessionId("sess-1")?.threadId, 777);
+  assert.equal(getBindingByAgentId("agent-1")?.threadId, 777);
 
   assert.deepEqual(resolveTelegramThread(99999), {
     kind: "unknown",

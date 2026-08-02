@@ -91,6 +91,19 @@ export function getBindingBySessionId(sessionId) {
 }
 
 /**
+ * @param {string} agentId
+ * @returns {TopicBinding|null}
+ */
+export function getBindingByAgentId(agentId) {
+  if (!agentId) return null;
+  const store = loadStore();
+  for (const binding of Object.values(store.byThreadId)) {
+    if (binding?.agentId === agentId) return binding;
+  }
+  return null;
+}
+
+/**
  * Resolve static project topic label OR dynamic agent binding.
  * @returns {{ kind: 'status'|'project'|'agent'|'unknown', label: string|null, binding: TopicBinding|null }}
  */
@@ -126,8 +139,23 @@ export async function ensureAgentTelegramTopic(session) {
   if (!agentTopicsEnabled()) return null;
   if (!getTelegramChatId()) return null;
 
-  const existing = getBindingBySessionId(session.sessionId);
-  if (existing) return existing;
+  const bySession = getBindingBySessionId(session.sessionId);
+  if (bySession) return bySession;
+
+  // Reuse topic if this IDE/SDK agent was mirrored before (new bridge session).
+  const byAgent = getBindingByAgentId(session.agentId);
+  if (byAgent) {
+    byAgent.sessionId = session.sessionId;
+    byAgent.project = session.project || byAgent.project;
+    if (session.name) {
+      byAgent.name = formatAgentTopicName(session.project, session.name);
+    }
+    const store = loadStore();
+    store.byThreadId[String(byAgent.threadId)] = byAgent;
+    store.bySessionId[session.sessionId] = byAgent.threadId;
+    saveStore();
+    return byAgent;
+  }
 
   const name = formatAgentTopicName(session.project, session.name);
   const chatId = getTelegramChatId();
@@ -161,7 +189,7 @@ export async function ensureAgentTelegramTopic(session) {
     await telegramApi("sendMessage", {
       chat_id: chatId,
       message_thread_id: binding.threadId,
-      text: `Agent ready for **${session.project}**.\nSend prompts here.\n\`${session.sessionId.slice(0, 8)}…\``,
+      text: `Mirroring **${session.project}** agent.\nSend follow-ups here.\n\`${String(session.agentId).slice(0, 12)}…\``,
       parse_mode: "Markdown",
     }).catch(() => {});
 

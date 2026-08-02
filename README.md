@@ -186,14 +186,27 @@ pnpm telegram:set-webhook
 
 | Command | Effect |
 |---------|--------|
-| `/phone_on` | Enable prompts + live draft streaming to Telegram |
-| `/phone_off` | Disable sync (default) |
-| `/status` | Health, sessions, phone mode |
+| `/phone_on` | Mirror Cursor Agents (Agents Window / local SDK) into Telegram topics; enable prompts |
+| `/phone_off` | Stop IDE mirror + phone prompts (default) |
+| `/status` | Health, sessions, IDE mirror |
 | `/stop` | Cancel active run(s) for this topic’s project (or all from Status) |
 | `/new` | Fresh session in the current project topic |
 | `/help` | List commands |
 
 Also accepted when typed: `/phone on` · `/phone off`.
+
+#### IDE agent mirror (`/phone_on`)
+
+While phone mode is on, the bridge polls local Cursor agents for each enabled project and:
+
+1. Resumes recent/running agents via the Cursor SDK (`Agent.list` / `Agent.resume`)
+2. Creates or reuses a forum topic per agent (`project · name`)
+3. Bootstraps the last few messages into Telegram
+4. Streams live runs as draft messages
+
+Reply in an agent topic to send a follow-up into that same Cursor agent. Regular Chat/Composer threads are not available via the public SDK — only Agents Window / local agents.
+
+Disable per-agent topics with `TELEGRAM_AGENT_TOPICS=0`. Optional knobs: `TELEGRAM_IDE_MIRROR_POLL_MS`, `TELEGRAM_IDE_MIRROR_RECENT_MS`, `TELEGRAM_IDE_MIRROR_MAX_PER_PROJECT`.
 
 Slash-menu preview is registered via Bot API `setMyCommands` (on bridge boot, or manually):
 
@@ -203,14 +216,15 @@ pnpm telegram:set-commands
 
 If `/` still shows nothing, force-quit Telegram and reopen, or run the command above after changing the bot token.
 
-Plain text in a **project topic** (`app`, `www`, `admin`, `email`, `cursor-bridge`, …) while phone mode is on starts/continues an agent for that repo. **Each new agent spawns its own Telegram forum topic** (title `project · name`); replies stream there. `/new` forces a fresh agent + topic. When the agent gets a real title, the forum topic is renamed. Disable with `TELEGRAM_AGENT_TOPICS=0`.
+You can also prompt in a **project topic** (`app`, `www`, `admin`, `email`, `cursor-bridge`, …) while phone mode is on — that starts/continues a bridge-spawned agent (own topic). `/new` forces a fresh agent + topic. When the agent gets a real title, the forum topic is renamed.
 
 ### Smoke test
 
 1. Status topic → `/status` or `/help`
-2. `/phone_on`
-3. app (or admin/email) topic → short prompt → draft then final message
-4. `/phone_off`
+2. `/phone_on` → should list mirrored Cursor Agents
+3. Open an agent topic → see recent messages; live runs stream
+4. Reply in that topic → follow-up into the Cursor agent
+5. `/phone_off`
 
 ## Ports
 

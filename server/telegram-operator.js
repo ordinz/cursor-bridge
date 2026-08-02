@@ -22,6 +22,12 @@ import {
 } from "./telegram.js";
 import { buildTelegramRichContent } from "./telegram-format.js";
 import {
+  catchUpAgentHistory,
+  getIdeMirrorStatus,
+  startIdeAgentMirror,
+  stopIdeAgentMirror,
+} from "./telegram-ide-mirror.js";
+import {
   ensureAgentTelegramTopic,
   resolveTelegramThread,
 } from "./telegram-topics.js";
@@ -83,7 +89,9 @@ function helpText() {
     "",
     "Also accepted: `/phone on` · `/phone off`",
     "",
-    `Start from ${projectList} (or \`/new\`). Each new agent **spawns its own Telegram topic**; replies stream there. Topic title updates when the agent is named.`,
+    `\`/phone_on\` mirrors **Cursor Agents** (Agents Window / local SDK) into Telegram topics and streams live runs.`,
+    "",
+    `You can also start from ${projectList} (or \`/new\`) — each new agent gets its own topic.`,
   ];
   return lines.join("\n");
 }
@@ -109,6 +117,11 @@ async function buildStatusText(sessions) {
       );
     }
   }
+  lines.push("");
+  const mirror = getIdeMirrorStatus();
+  lines.push(
+    `ide mirror: **${mirror.running ? "ON" : "OFF"}**${mirror.streamingRuns ? ` · streaming ${mirror.streamingRuns}` : ""}`,
+  );
   lines.push("");
   lines.push("Commands: `/phone_on` · `/phone_off` · `/status` · `/stop` · `/new` · `/help`");
   return lines.join("\n");
@@ -258,6 +271,9 @@ async function runProjectPrompt(sessions, opts) {
       }
     }
   }
+
+  // Avoid re-mirroring the Telegram turn via IDE history poll.
+  void catchUpAgentHistory(record.agentId, record.project);
 }
 
 function enqueueProjectRun(project, task) {
@@ -305,8 +321,30 @@ async function handleCommand(sessions, msg) {
     setPhoneMode(true);
     await reply(
       threadId,
-      "phone mode ON — prompts in project topics spawn/use agent topics and stream there",
+      "phone mode ON — mirroring Cursor Agents into Telegram…",
     );
+    try {
+      const result = await startIdeAgentMirror(sessions);
+      const lines = [
+        `Mirroring **${result.mirrored}** recent/running agent(s).`,
+        "Each agent has (or gets) its own forum topic; live runs stream there.",
+        "Reply in an agent topic to send a follow-up into that Cursor agent.",
+      ];
+      if (result.agents?.length) {
+        lines.push("");
+        for (const a of result.agents.slice(0, 12)) {
+          lines.push(
+            `· \`${a.project}\` ${a.name} [${a.status}]`,
+          );
+        }
+      }
+      await reply(threadId, lines.join("\n"), { rich: true });
+    } catch (err) {
+      await reply(
+        threadId,
+        `mirror started with errors: ${err instanceof Error ? err.message : "failed"}`,
+      );
+    }
     return;
   }
   if (cmd === "/phone" && args === "") {
@@ -319,7 +357,8 @@ async function handleCommand(sessions, msg) {
     (cmd === "/phone" && args === "off")
   ) {
     setPhoneMode(false);
-    await reply(threadId, "phone mode OFF — laptop work stays quiet");
+    stopIdeAgentMirror();
+    await reply(threadId, "phone mode OFF — IDE mirror stopped");
     return;
   }
   if (cmd === "/status" || (cmd === "/phone" && args === "")) {
@@ -407,19 +446,22 @@ async function handleCommand(sessions, msg) {
     if (resolved.kind === "status" || resolved.label === "general") {
       await reply(
         threadId,
-        `Status topic: /phone_on · /phone_off · /status · /stop\nPrompts go in project topics (${projectTopicNames().join(", ") || "app, www, …"}) — each new agent gets its own Telegram topic.`,
+        `Status topic: /phone_on · /phone_off · /status · /stop\n/phone_on mirrors Cursor Agents → Telegram topics.\nOr prompt in project topics (${projectTopicNames().join(", ") || "app, www, …"}).`,
       );
       return;
     }
     await reply(
       threadId,
-      "unknown topic — use a project topic or an agent topic spawned by /new",
+      "unknown topic — use a project topic, /phone_on (IDE mirror), or /new",
     );
     return;
   }
 
   if (!isPhoneModeOn()) {
-    await reply(threadId, "phone mode off — send /phone_on to sync from this phone");
+    await reply(
+      threadId,
+      "phone mode off — send /phone_on to mirror Cursor Agents + enable prompts",
+    );
     return;
   }
 
