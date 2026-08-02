@@ -17,9 +17,15 @@ const RECENT_MS = Number(
   process.env.TELEGRAM_IDE_MIRROR_RECENT_MS ?? 2 * 60 * 60 * 1000,
 );
 const MAX_AGENTS_PER_PROJECT = Number(
-  process.env.TELEGRAM_IDE_MIRROR_MAX_PER_PROJECT ?? 12,
+  process.env.TELEGRAM_IDE_MIRROR_MAX_PER_PROJECT ?? 8,
 );
-const BOOTSTRAP_ITEMS = 6;
+const MAX_AGENTS_TOTAL = Number(
+  process.env.TELEGRAM_IDE_MIRROR_MAX_TOTAL ?? 10,
+);
+const BOOTSTRAP_ITEMS = 4;
+const TOPIC_CREATE_GAP_MS = Number(
+  process.env.TELEGRAM_IDE_MIRROR_TOPIC_GAP_MS ?? 1200,
+);
 
 const STATE_PATH = path.resolve(
   process.env.TELEGRAM_IDE_MIRROR_STORE ??
@@ -312,10 +318,10 @@ function isRecentEnough(info, now) {
 }
 
 /**
- * @param {import("./sessions.js").SessionManager} sessions
  * @param {string} project
+ * @returns {Promise<object[]>}
  */
-async function mirrorProject(sessions, project) {
+async function listProjectCandidates(project) {
   let cwd;
   try {
     cwd = resolveProject(project);
@@ -336,33 +342,65 @@ async function mirrorProject(sessions, project) {
   }
 
   const now = Date.now();
-  const candidates = (listed.items || [])
+  return (listed.items || [])
     .filter((a) => a?.agentId && !a.archived && isRecentEnough(a, now))
     .sort(
       (a, b) =>
         Number(b.lastModified || b.createdAt || 0) -
         Number(a.lastModified || a.createdAt || 0),
     )
-    .slice(0, MAX_AGENTS_PER_PROJECT);
+    .slice(0, MAX_AGENTS_PER_PROJECT)
+    .map((info) => ({ project, info }));
+}
 
-  const mirrored = [];
-  for (const info of candidates) {
+/**
+ * Prefer running agents, then most recently modified, capped globally.
+ * @param {{ project: string, info: object }[]} rows
+ */
+function pickMirrorTargets(rows) {
+  return [...rows]
+    .sort((a, b) => {
+      const ar = a.info.status === "running" ? 1 : 0;
+      const br = b.info.status === "running" ? 1 : 0;
+      if (ar !== br) return br - ar;
+      return (
+        Number(b.info.lastModified || b.info.createdAt || 0) -
+        Number(a.info.lastModified || a.info.createdAt || 0)
+      );
+    })
+    .slice(0, MAX_AGENTS_TOTAL);
+}
+
+async function mirrorPass(sessions) {
+  /** @type {{ project: string, info: object }[]} */
+  let candidates = [];
+  for (const project of ENABLED_PROJECT_IDS) {
     if (!isPhoneModeOn()) break;
+    candidates = candidates.concat(await listProjectCandidates(project));
+  }
+
+  const targets = pickMirrorTargets(candidates);
+  const mirrored = [];
+  for (const { project, info } of targets) {
+    if (!isPhoneModeOn()) break;
+    const before = Date.now();
     const row = await mirrorOneAgent(sessions, project, info);
     if (row) mirrored.push(row);
+    // Soft throttle Telegram topic creates / bootstrap posts
+    const elapsed = Date.now() - before;
+    if (elapsed < TOPIC_CREATE_GAP_MS) {
+      await new Promise((r) => setTimeout(r, TOPIC_CREATE_GAP_MS - elapsed));
+    }
   }
   return mirrored;
 }
 
 async function tick(sessions, gen) {
   if (!isPhoneModeOn() || gen !== generation) return;
-  for (const project of ENABLED_PROJECT_IDS) {
-    if (!isPhoneModeOn() || gen !== generation) return;
-    try {
-      await mirrorProject(sessions, project);
-    } catch (err) {
-      console.warn(`[ide-mirror] ${project}:`, err?.message || err);
-    }
+  try {
+    await mirrorPass(sessions);
+  } catch (err) {
+    console.warn("[ide-mirror] tick failed:", err?.message || err);
   }
 }
 
@@ -372,18 +410,13 @@ async function tick(sessions, gen) {
  * @returns {Promise<{ mirrored: number }>}
  */
 export async function startIdeAgentMirror(sessions) {
-  stopIdeAgentMirror();
+  stopIdeAgentMirror({ quiet: true });
   const gen = ++generation;
 
-  // Immediate first pass so /phone_on can report counts
-  let mirrored = [];
-  for (const project of ENABLED_PROJECT_IDS) {
-    try {
-      const rows = await mirrorProject(sessions, project);
-      mirrored = mirrored.concat(rows);
-    } catch (err) {
-      console.warn(`[ide-mirror] ${project}:`, err?.message || err);
-    }
+  const mirrored = await mirrorPass(sessions);
+
+  if (gen !== generation) {
+    return { mirrored: mirrored.length, agents: mirrored };
   }
 
   pollTimer = setInterval(() => {
@@ -397,7 +430,7 @@ export async function startIdeAgentMirror(sessions) {
   return { mirrored: mirrored.length, agents: mirrored };
 }
 
-export function stopIdeAgentMirror() {
+export function stopIdeAgentMirror({ quiet = false } = {}) {
   generation += 1;
   if (pollTimer) {
     clearInterval(pollTimer);
@@ -405,7 +438,7 @@ export function stopIdeAgentMirror() {
   }
   streamingRunIds.clear();
   mirroringAgentIds.clear();
-  console.log("📲 IDE agent mirror off");
+  if (!quiet) console.log("📲 IDE agent mirror off");
 }
 
 export function getIdeMirrorStatus() {

@@ -111,11 +111,17 @@ export function resolveWebhookPublicUrl() {
   return `https://${hostname}/cursor-bridge/telegram/webhook`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * @param {string} method
  * @param {Record<string, unknown>} [body]
+ * @param {{ retries?: number }} [opts]
  */
-export async function telegramApi(method, body) {
+export async function telegramApi(method, body, opts = {}) {
+  const retries = opts.retries ?? 2;
   const token = getTelegramBotToken();
   if (!token) {
     throw new TelegramNotConfiguredError();
@@ -133,6 +139,12 @@ export async function telegramApi(method, body) {
       typeof data.description === "string"
         ? data.description
         : `HTTP ${res.status}`;
+    const retryAfter = detail.match(/retry after (\d+)/i);
+    if (retries > 0 && (res.status === 429 || retryAfter)) {
+      const waitSec = retryAfter ? Number(retryAfter[1]) : 3;
+      await sleep(Math.min(Math.max(waitSec, 1), 60) * 1000);
+      return telegramApi(method, body, { retries: retries - 1 });
+    }
     throw new TelegramSendError(`Telegram API error: ${detail}`);
   }
   return data.result;

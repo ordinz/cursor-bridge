@@ -186,13 +186,7 @@ export async function ensureAgentTelegramTopic(session) {
     store.bySessionId[session.sessionId] = binding.threadId;
     saveStore();
 
-    await telegramApi("sendMessage", {
-      chat_id: chatId,
-      message_thread_id: binding.threadId,
-      text: `Mirroring **${session.project}** agent.\nSend follow-ups here.\n\`${String(session.agentId).slice(0, 12)}…\``,
-      parse_mode: "Markdown",
-    }).catch(() => {});
-
+    // Skip welcome spam during bulk IDE mirror; topic title is enough.
     return binding;
   } catch (err) {
     console.warn(
