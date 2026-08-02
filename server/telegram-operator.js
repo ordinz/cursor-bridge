@@ -23,7 +23,9 @@ import {
 import { buildTelegramRichContent } from "./telegram-format.js";
 import {
   catchUpAgentHistory,
+  claimIdeMirrorRun,
   getIdeMirrorStatus,
+  releaseIdeMirrorRun,
   startIdeAgentMirror,
   stopIdeAgentMirror,
 } from "./telegram-ide-mirror.js";
@@ -201,6 +203,7 @@ async function runProjectPrompt(sessions, opts) {
   }
 
   const streamer = createDraftStreamer({ messageThreadId: streamThreadId });
+  let claimedRunId = null;
 
   sessions.notePrompt(id, prompt);
   sessions.startRunEvents(id);
@@ -227,53 +230,67 @@ async function runProjectPrompt(sessions, opts) {
     createSseEvent("user", id, { text: prompt, source: "telegram" }),
   );
 
-  await streamer.noteStarted();
+  try {
+    await streamer.noteStarted();
 
-  const abortController = new AbortController();
-  const run = await record.agent.send(prompt);
-  sessions.setActiveRun(id, run, abortController);
+    const abortController = new AbortController();
+    const run = await record.agent.send(prompt);
+    sessions.setActiveRun(id, run, abortController);
 
-  const outcome = await consumeRun(run, {
-    sessionId: id,
-    signal: abortController.signal,
-    onEvent: (event) => {
-      publish(event);
-      if (event.type === "assistant" && event.text) {
-        sessions.noteAssistantText(id, event.text);
-        streamer.push(event.text);
-      }
-    },
-  });
+    claimedRunId = run?.id || run?.runId || `tg-${id}`;
+    claimIdeMirrorRun(record.agentId, claimedRunId);
 
-  if (outcome.cancelled) {
-    sessions.clearActiveRun(id, "cancelled");
-    await streamer.finalize();
-    await reply(streamThreadId, "cancelled");
-  } else if (outcome.failed) {
-    sessions.clearActiveRun(id, "error");
-    await streamer.fail("run failed");
-  } else {
-    sessions.clearActiveRun(id, "idle");
-    await streamer.finalize();
+    const outcome = await consumeRun(run, {
+      sessionId: id,
+      signal: abortController.signal,
+      onEvent: (event) => {
+        publish(event);
+        if (event.type === "assistant" && event.text) {
+          sessions.noteAssistantText(id, event.text);
+          streamer.push(event.text);
+        }
+      },
+    });
 
-    if (sessions.scheduleNaming(id)) {
-      const snapshot = sessions.get(id);
-      if (snapshot) {
-        void finalizeAgentName({
-          sessions,
-          sessionId: id,
-          agentId: snapshot.agentId,
-          project: snapshot.project,
-          cwd: snapshot.cwd,
-          prompt,
-          assistantSnippet: snapshot.lastAssistantSnippet,
-        });
+    if (outcome.cancelled) {
+      sessions.clearActiveRun(id, "cancelled");
+      await streamer.finalize();
+      await reply(streamThreadId, "cancelled");
+    } else if (outcome.failed) {
+      sessions.clearActiveRun(id, "error");
+      await streamer.fail("run failed");
+    } else {
+      sessions.clearActiveRun(id, "idle");
+      await streamer.finalize();
+
+      if (sessions.scheduleNaming(id)) {
+        const snapshot = sessions.get(id);
+        if (snapshot) {
+          void finalizeAgentName({
+            sessions,
+            sessionId: id,
+            agentId: snapshot.agentId,
+            project: snapshot.project,
+            cwd: snapshot.cwd,
+            prompt,
+            assistantSnippet: snapshot.lastAssistantSnippet,
+          });
+        }
       }
     }
+  } catch (err) {
+    sessions.clearActiveRun(id, "error");
+    await streamer.abort(
+      `error: ${err instanceof Error ? err.message : "run failed"}`,
+    );
+    throw err;
+  } finally {
+    if (claimedRunId) {
+      releaseIdeMirrorRun(record.agentId, claimedRunId);
+    }
+    // Avoid re-mirroring the Telegram turn via IDE history poll.
+    void catchUpAgentHistory(record.agentId, record.project);
   }
-
-  // Avoid re-mirroring the Telegram turn via IDE history poll.
-  void catchUpAgentHistory(record.agentId, record.project);
 }
 
 function enqueueProjectRun(project, task) {

@@ -247,7 +247,9 @@ async function maybeStreamActiveRun(sessions, detail, threadId) {
       err?.message || err,
     );
     try {
-      await streamer.fail?.(String(err?.message || "stream failed"));
+      await streamer.abort?.(
+        `error: ${String(err?.message || "stream failed")}`,
+      );
     } catch {
       /* ignore */
     }
@@ -447,6 +449,32 @@ export function getIdeMirrorStatus() {
     streamingRuns: streamingRunIds.size,
     pollMs: POLL_MS,
   };
+}
+
+/** Claim a run so the IDE mirror won't open a second Telegram streamer on it. */
+export function claimIdeMirrorRun(agentId, runId = "telegram") {
+  if (!agentId) return false;
+  const key = `${agentId}:${runId}`;
+  if (streamingRunIds.has(key)) return false;
+  streamingRunIds.add(key);
+  mirroringAgentIds.add(agentId);
+  return true;
+}
+
+export function releaseIdeMirrorRun(agentId, runId = "telegram") {
+  if (!agentId) return;
+  streamingRunIds.delete(`${agentId}:${runId}`);
+  // Keep agent marked if another run key is still streaming.
+  const still = [...streamingRunIds].some((id) => id.startsWith(`${agentId}:`));
+  if (!still) mirroringAgentIds.delete(agentId);
+}
+
+export function isIdeMirrorStreamingAgent(agentId) {
+  if (!agentId) return false;
+  return (
+    mirroringAgentIds.has(agentId) ||
+    [...streamingRunIds].some((id) => id.startsWith(`${agentId}:`))
+  );
 }
 
 /** Test helper */

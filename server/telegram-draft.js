@@ -7,13 +7,12 @@ import {
 import { buildTelegramRichContent } from "./telegram-format.js";
 
 const DEFAULT_THROTTLE_MS = 450;
-const TOOL_GAP_PING_MS = 45_000;
 
 /**
  * Assistant reply streamer for Telegram forums.
- * - Short "running…" status (plain)
- * - Optional rich HTML drafts (ephemeral) — silent buffer if drafts unsupported
- * - Exactly one rich HTML final message (no plain-draft duplicates)
+ * - One short "running…" at start (no recurring "still working…" spam)
+ * - Optional rich HTML drafts when supported; otherwise silent buffer
+ * - Exactly one rich HTML final message
  *
  * @param {{ messageThreadId?: number|null, throttleMs?: number }} opts
  */
@@ -27,11 +26,17 @@ export function createDraftStreamer(opts = {}) {
   let mode = "rich-draft";
   let timer = null;
   let lastFlushAt = 0;
-  let gapTimer = null;
   let finalized = false;
   let startedStatusSent = false;
   let flushInFlight = null;
   let finalizedSent = false;
+
+  function clearTimers() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
 
   async function doFlush() {
     if (finalized || !buffer.trim() || mode !== "rich-draft") return;
@@ -47,7 +52,6 @@ export function createDraftStreamer(opts = {}) {
         messageThreadId,
       });
     } catch (err) {
-      // Forum groups often reject drafts — keep buffering silently until finalize.
       mode = "silent";
       console.warn(
         "[telegram] rich draft unavailable, will send one final rich message:",
@@ -70,24 +74,47 @@ export function createDraftStreamer(opts = {}) {
       }
       return;
     }
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    clearTimers();
     flushInFlight = doFlush();
   }
 
-  function scheduleGapPing() {
-    if (gapTimer) clearTimeout(gapTimer);
-    gapTimer = setTimeout(() => {
-      if (finalized) return;
-      void sendTelegramMessage({
-        text: "still working…",
-        messageThreadId,
-      }).catch(() => {});
-      scheduleGapPing();
-    }, TOOL_GAP_PING_MS);
-    if (typeof gapTimer.unref === "function") gapTimer.unref();
+  async function finish(finalText) {
+    if (finalized) return;
+    finalized = true;
+    clearTimers();
+    if (flushInFlight) {
+      await flushInFlight.catch(() => {});
+    }
+
+    if (typeof finalText === "string" && finalText.length > buffer.length) {
+      buffer = finalText;
+    }
+
+    const text = buffer.trim();
+    if (!text) {
+      if (!finalizedSent) {
+        finalizedSent = true;
+        await sendTelegramMessage({
+          text: "(no assistant text)",
+          messageThreadId,
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    if (finalizedSent) return;
+    finalizedSent = true;
+
+    if (mode === "rich-draft") {
+      await doFlush().catch(() => {});
+    }
+
+    const { html, plainFallback } = buildTelegramRichContent(text);
+    await sendTelegramRichMessage({
+      html,
+      plainFallback,
+      messageThreadId,
+    });
   }
 
   return {
@@ -102,67 +129,39 @@ export function createDraftStreamer(opts = {}) {
       } catch {
         // ignore
       }
-      scheduleGapPing();
     },
 
     /** @param {string} delta */
     push(delta) {
       if (finalized || !delta) return;
       buffer += delta;
-      scheduleGapPing();
       scheduleFlush(false);
     },
 
     /** @param {string} [finalText] */
     async finalize(finalText) {
+      await finish(finalText);
+    },
+
+    /** Stop timers without posting (e.g. send() threw before a run existed). */
+    async abort(message) {
       if (finalized) return;
       finalized = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (gapTimer) {
-        clearTimeout(gapTimer);
-        gapTimer = null;
-      }
+      clearTimers();
       if (flushInFlight) {
         await flushInFlight.catch(() => {});
       }
-
-      if (typeof finalText === "string" && finalText.length > buffer.length) {
-        buffer = finalText;
+      if (message && !finalizedSent) {
+        finalizedSent = true;
+        await sendTelegramMessage({
+          text: message,
+          messageThreadId,
+        }).catch(() => {});
       }
-
-      const text = buffer.trim();
-      if (!text) {
-        if (!finalizedSent) {
-          finalizedSent = true;
-          await sendTelegramMessage({
-            text: "(no assistant text)",
-            messageThreadId,
-          }).catch(() => {});
-        }
-        return;
-      }
-
-      if (finalizedSent) return;
-      finalizedSent = true;
-
-      // One last ephemeral draft if supported, then a single rich permanent message.
-      if (mode === "rich-draft") {
-        await doFlush().catch(() => {});
-      }
-
-      const { html, plainFallback } = buildTelegramRichContent(text);
-      await sendTelegramRichMessage({
-        html,
-        plainFallback,
-        messageThreadId,
-      });
     },
 
     async fail(message) {
-      await this.finalize();
+      await finish();
       await sendTelegramMessage({
         text: `error: ${message || "run failed"}`,
         messageThreadId,
