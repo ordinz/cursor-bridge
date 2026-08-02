@@ -221,6 +221,26 @@ export function createRouter(sessions) {
       const { model = "default" } = req.body ?? {};
       const project = validateProjectId(req.body?.project);
       const session = await sessions.create({ project, model });
+
+      // Phone mode: each new UI/API agent gets its own Telegram forum topic.
+      if (getPhoneModeState().phoneMode) {
+        try {
+          const { ensureAgentTelegramTopic } = await import(
+            "./telegram-topics.js"
+          );
+          const binding = await ensureAgentTelegramTopic(session);
+          if (binding) {
+            sessions.setTelegramThreadId(session.sessionId, binding.threadId);
+            session.telegramThreadId = binding.threadId;
+          }
+        } catch (err) {
+          console.warn(
+            "[sessions] telegram topic spawn failed:",
+            err?.message || err,
+          );
+        }
+      }
+
       res.status(201).json(session);
     } catch (err) {
       next(err);

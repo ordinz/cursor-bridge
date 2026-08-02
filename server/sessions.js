@@ -125,6 +125,7 @@ export class SessionManager {
       name,
       namedFromPrompt: false,
       namingScheduled: false,
+      telegramThreadId: null,
       activeRun: null,
       abortController: null,
       runStatus: "idle",
@@ -137,6 +138,14 @@ export class SessionManager {
     this.sessions.set(sessionId, record);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
+  }
+
+  setTelegramThreadId(sessionId, threadId) {
+    const record = this.get(sessionId);
+    if (!record) return;
+    record.telegramThreadId =
+      threadId == null ? null : Number(threadId);
+    record.lastActivityAt = Date.now();
   }
 
   async resumeAgent({ agentId, project, model = "default" }) {
@@ -164,6 +173,7 @@ export class SessionManager {
       name: storedName ?? buildAgentName({ project, model }),
       namedFromPrompt,
       namingScheduled: false,
+      telegramThreadId: null,
       activeRun: null,
       abortController: null,
       runStatus: "idle",
@@ -312,6 +322,7 @@ function toPublicSession(record) {
     cwd: record.cwd,
     model: record.model,
     name: record.name,
+    telegramThreadId: record.telegramThreadId ?? null,
     runStatus: record.runStatus,
     runActive: Boolean(record.activeRun),
     createdAt: record.createdAt,

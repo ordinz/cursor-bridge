@@ -203,7 +203,7 @@ pnpm telegram:set-commands
 
 If `/` still shows nothing, force-quit Telegram and reopen, or run the command above after changing the bot token.
 
-Plain text in a **project topic** (`app`, `www`, `admin`, `email`, `cursor-bridge`, …) while phone mode is on becomes a Cursor prompt for that repo. Replies stream via rich drafts when available, then persist as one rich HTML message.
+Plain text in a **project topic** (`app`, `www`, `admin`, `email`, `cursor-bridge`, …) while phone mode is on starts/continues an agent for that repo. **Each new agent spawns its own Telegram forum topic** (title `project · name`); replies stream there. `/new` forces a fresh agent + topic. When the agent gets a real title, the forum topic is renamed. Disable with `TELEGRAM_AGENT_TOPICS=0`.
 
 ### Smoke test
 

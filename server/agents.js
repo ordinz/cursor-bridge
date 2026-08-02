@@ -119,6 +119,13 @@ export async function finalizeAgentName({
   const record = sessions.get(sessionId);
   if (!record) return name;
 
+  try {
+    const { renameAgentTelegramTopic } = await import("./telegram-topics.js");
+    await renameAgentTelegramTopic(sessionId, project, name);
+  } catch {
+    /* telegram optional */
+  }
+
   sessions.publishEvent(
     sessionId,
     createSseEvent("session", sessionId, {

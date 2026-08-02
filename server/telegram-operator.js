@@ -21,29 +21,38 @@ import {
   TELEGRAM_BOT_COMMANDS,
 } from "./telegram.js";
 import { buildTelegramRichContent } from "./telegram-format.js";
+import {
+  ensureAgentTelegramTopic,
+  resolveTelegramThread,
+} from "./telegram-topics.js";
 
 /** @type {Map<string, Promise<void>>} */
 const projectRunLocks = new Map();
-
-function topicLabel(threadId) {
-  const map = getTelegramTopicMap();
-  if (threadId == null) return "general";
-  for (const [label, id] of Object.entries(map)) {
-    if (id != null && id === threadId) return label;
-  }
-  return null;
-}
-
-function projectForTopic(label) {
-  if (!label || label === "status" || label === "general") return null;
-  return label;
-}
 
 function projectTopicNames() {
   const map = getTelegramTopicMap();
   return Object.entries(map)
     .filter(([label, id]) => label !== "status" && id != null)
     .map(([label]) => label);
+}
+
+/**
+ * Attach (or create) a per-agent forum topic and remember it on the session.
+ * @param {import("./sessions.js").SessionManager} sessions
+ * @param {{ sessionId: string, agentId: string, project: string, name?: string, telegramThreadId?: number|null }} detail
+ */
+async function attachAgentTopic(sessions, detail) {
+  if (detail.telegramThreadId) {
+    return {
+      threadId: detail.telegramThreadId,
+      name: detail.name,
+      reused: true,
+    };
+  }
+  const binding = await ensureAgentTelegramTopic(detail);
+  if (!binding) return null;
+  sessions.setTelegramThreadId(detail.sessionId, binding.threadId);
+  return { threadId: binding.threadId, name: binding.name, reused: false };
 }
 
 async function reply(threadId, text, { rich = false } = {}) {
@@ -74,7 +83,7 @@ function helpText() {
     "",
     "Also accepted: `/phone on` · `/phone off`",
     "",
-    `Prompts: type freely in ${projectList} topics while phone mode is on.`,
+    `Start from ${projectList} (or \`/new\`). Each new agent **spawns its own Telegram topic**; replies stream there. Topic title updates when the agent is named.`,
   ];
   return lines.join("\n");
 }
@@ -107,14 +116,35 @@ async function buildStatusText(sessions) {
 
 /**
  * Run a chat turn for a project and stream assistant text to Telegram.
+ * Spawns a per-agent forum topic when starting a new session (or /new).
+ *
  * @param {import("./sessions.js").SessionManager} sessions
- * @param {{ project: string, prompt: string, messageThreadId: number|null, forceNew?: boolean }} opts
+ * @param {{
+ *   project: string,
+ *   prompt: string,
+ *   messageThreadId: number|null,
+ *   forceNew?: boolean,
+ *   sessionId?: string|null,
+ *   announceFromThreadId?: number|null,
+ * }} opts
  */
 async function runProjectPrompt(sessions, opts) {
-  const { project, prompt, messageThreadId, forceNew = false } = opts;
-  const streamer = createDraftStreamer({ messageThreadId });
+  const {
+    project,
+    prompt,
+    messageThreadId,
+    forceNew = false,
+    sessionId = null,
+    announceFromThreadId = null,
+  } = opts;
 
-  let detail = forceNew ? null : sessions.findLatestForProject(project);
+  let detail = null;
+  if (sessionId) {
+    detail = sessions.getDetail(sessionId);
+  } else if (!forceNew) {
+    detail = sessions.findLatestForProject(project);
+  }
+
   if (detail && detail.runActive) {
     await reply(
       messageThreadId,
@@ -123,6 +153,7 @@ async function runProjectPrompt(sessions, opts) {
     return;
   }
 
+  const createdFresh = !detail;
   if (!detail) {
     detail = await sessions.create({ project, model: "default" });
   }
@@ -134,6 +165,29 @@ async function runProjectPrompt(sessions, opts) {
     sessions.setInterimName(id, nameFromPrompt(prompt));
     record = sessions.require(id);
   }
+
+  // Per-agent Telegram topic: create on new agents; reuse when bound.
+  let streamThreadId = messageThreadId;
+  const topic = await attachAgentTopic(sessions, {
+    ...detail,
+    name: record.name,
+    telegramThreadId: record.telegramThreadId,
+  });
+  if (topic?.threadId != null) {
+    streamThreadId = topic.threadId;
+    if (
+      announceFromThreadId != null &&
+      announceFromThreadId !== topic.threadId &&
+      (createdFresh || forceNew || !topic.reused)
+    ) {
+      await reply(
+        announceFromThreadId,
+        `Spawned agent topic «${topic.name}» — streaming there.`,
+      );
+    }
+  }
+
+  const streamer = createDraftStreamer({ messageThreadId: streamThreadId });
 
   sessions.notePrompt(id, prompt);
   sessions.startRunEvents(id);
@@ -181,7 +235,7 @@ async function runProjectPrompt(sessions, opts) {
   if (outcome.cancelled) {
     sessions.clearActiveRun(id, "cancelled");
     await streamer.finalize();
-    await reply(messageThreadId, "cancelled");
+    await reply(streamThreadId, "cancelled");
   } else if (outcome.failed) {
     sessions.clearActiveRun(id, "error");
     await streamer.fail("run failed");
@@ -222,10 +276,14 @@ function enqueueProjectRun(project, task) {
 
 /**
  * @param {import("./sessions.js").SessionManager} sessions
- * @param {{ text: string, threadId: number|null, topic: string|null }} msg
+ * @param {{
+ *   text: string,
+ *   threadId: number|null,
+ *   resolved: ReturnType<typeof resolveTelegramThread>,
+ * }} msg
  */
 async function handleCommand(sessions, msg) {
-  const { text, threadId, topic } = msg;
+  const { text, threadId, resolved } = msg;
   // Menu picks arrive as /status@cursor_bridge_mbp_bot — strip @bot suffix.
   const trimmed = text
     .trim()
@@ -234,13 +292,21 @@ async function handleCommand(sessions, msg) {
   const [cmd, ...argParts] = lower.split(/\s+/);
   const args = argParts.join(" ").trim();
 
+  const projectFromThread =
+    resolved.kind === "project" || resolved.kind === "agent"
+      ? resolved.label
+      : null;
+
   if (
     cmd === "/phone_on" ||
     cmd === "/phoneon" ||
     (cmd === "/phone" && args === "on")
   ) {
     setPhoneMode(true);
-    await reply(threadId, "phone mode ON — prompts in app/www will run + stream here");
+    await reply(
+      threadId,
+      "phone mode ON — prompts in project topics spawn/use agent topics and stream there",
+    );
     return;
   }
   if (cmd === "/phone" && args === "") {
@@ -265,10 +331,18 @@ async function handleCommand(sessions, msg) {
     return;
   }
   if (cmd === "/stop") {
-    const project = projectForTopic(topic);
-    const targets = project
-      ? sessions.listActiveRuns(project)
-      : sessions.listActiveRuns();
+    let targets;
+    if (resolved.kind === "agent" && resolved.binding?.sessionId) {
+      const detail = sessions.getDetail(resolved.binding.sessionId);
+      targets =
+        detail?.runActive
+          ? [detail]
+          : sessions.listActiveRuns(resolved.binding.project);
+    } else if (projectFromThread) {
+      targets = sessions.listActiveRuns(projectFromThread);
+    } else {
+      targets = sessions.listActiveRuns();
+    }
     if (!targets.length) {
       await reply(threadId, "no active runs");
       return;
@@ -282,12 +356,17 @@ async function handleCommand(sessions, msg) {
     }
     await reply(
       threadId,
-      `stopped ${targets.length} run(s)${project ? ` for ${project}` : ""}`,
+      `stopped ${targets.length} run(s)${projectFromThread ? ` for ${projectFromThread}` : ""}`,
     );
     return;
   }
   if (cmd === "/new") {
-    const project = projectForTopic(topic);
+    const project =
+      resolved.kind === "project"
+        ? resolved.label
+        : resolved.kind === "agent"
+          ? resolved.binding?.project
+          : null;
     if (!project) {
       await reply(
         threadId,
@@ -308,24 +387,34 @@ async function handleCommand(sessions, msg) {
       }
     }
     const created = await sessions.create({ project, model: "default" });
-    await reply(
-      threadId,
-      `new ${project} session ${created.sessionId.slice(0, 8)}… — send a prompt`,
-    );
+    const topic = await attachAgentTopic(sessions, created);
+    if (topic?.threadId != null) {
+      await reply(
+        threadId,
+        `new ${project} agent → «${topic.name}»\nSend prompts in that topic.`,
+      );
+    } else {
+      await reply(
+        threadId,
+        `new ${project} session ${created.sessionId.slice(0, 8)}… — send a prompt`,
+      );
+    }
     return;
   }
 
   // Plain text prompt
-  const project = projectForTopic(topic);
-  if (!project) {
-    if (topic === "status" || topic == null) {
+  if (resolved.kind === "status" || resolved.kind === "unknown") {
+    if (resolved.kind === "status" || resolved.label === "general") {
       await reply(
         threadId,
-        `Status topic: /phone_on · /phone_off · /status · /stop\nPrompts go in project topics (${projectTopicNames().join(", ") || "app, www, …"}).`,
+        `Status topic: /phone_on · /phone_off · /status · /stop\nPrompts go in project topics (${projectTopicNames().join(", ") || "app, www, …"}) — each new agent gets its own Telegram topic.`,
       );
       return;
     }
-    await reply(threadId, "unknown topic — configure TELEGRAM_TOPIC_* env vars");
+    await reply(
+      threadId,
+      "unknown topic — use a project topic or an agent topic spawned by /new",
+    );
     return;
   }
 
@@ -334,11 +423,20 @@ async function handleCommand(sessions, msg) {
     return;
   }
 
+  const project = projectFromThread;
+  const boundSessionId =
+    resolved.kind === "agent" ? resolved.binding?.sessionId : null;
+
   void enqueueProjectRun(project, () =>
     runProjectPrompt(sessions, {
       project,
       prompt: trimmed,
       messageThreadId: threadId,
+      sessionId: boundSessionId,
+      // From a static project topic, announce + stream into a fresh agent topic.
+      announceFromThreadId:
+        resolved.kind === "project" ? threadId : null,
+      forceNew: false,
     }),
   ).catch(async (err) => {
     console.error("[telegram] prompt failed:", err);
@@ -399,12 +497,12 @@ export function createTelegramWebhookHandler(sessions) {
         message.message_thread_id != null
           ? Number(message.message_thread_id)
           : null;
-      const topic = topicLabel(threadId);
+      const resolved = resolveTelegramThread(threadId);
 
       await handleCommand(sessions, {
         text,
         threadId,
-        topic,
+        resolved,
       });
     } catch (err) {
       console.error("[telegram] webhook handler error:", err);
