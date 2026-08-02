@@ -148,17 +148,19 @@ Webhook URL:
 
 1. Create a private Telegram group named **`Cursor Bridge`**.
 2. Enable **Topics** (forum mode) in group settings.
-3. Create three topics: **`Status`**, **`app`**, **`www`**.
+3. Create at least the **`Status`** topic (or let the bot create all topics in step 7).
 4. Add your bot (same `TELEGRAM_BOT_TOKEN` as outbound notify, **not** the Matrix support-chat bot).
 5. Make the bot an admin with **Manage topics** + **Post messages**.
 6. In BotFather → your bot → **Group Privacy → Turn off** (so free-text prompts are visible).
-7. Post a message in each topic, then run:
+7. Create / sync forum topics for each enabled project:
 
 ```bash
-pnpm telegram:setup-topics
+pnpm telegram:create-topics
 ```
 
-Copy `TELEGRAM_CHAT_ID` and `TELEGRAM_TOPIC_STATUS` / `_APP` / `_WWW` into `.env`. Generate a webhook secret:
+This creates missing topics (`Status`, `app`, `www`, `admin`, `email`, `cursor-bridge`, …) via Bot API and writes `TELEGRAM_TOPIC_*` into `.env`. Or discover ids manually with `pnpm telegram:setup-topics` after posting in each topic.
+
+Generate a webhook secret:
 
 ```bash
 openssl rand -hex 24   # → TELEGRAM_WEBHOOK_SECRET
@@ -188,7 +190,7 @@ pnpm telegram:set-webhook
 | `/phone_off` | Disable sync (default) |
 | `/status` | Health, sessions, phone mode |
 | `/stop` | Cancel active run(s) for this topic’s project (or all from Status) |
-| `/new` | Fresh session in `app` / `www` topic |
+| `/new` | Fresh session in the current project topic |
 | `/help` | List commands |
 
 Also accepted when typed: `/phone on` · `/phone off`.
@@ -201,13 +203,13 @@ pnpm telegram:set-commands
 
 If `/` still shows nothing, force-quit Telegram and reopen, or run the command above after changing the bot token.
 
-Plain text in **app** / **www** while phone mode is on becomes a Cursor prompt. Replies stream via rich drafts when available, then persist as one rich HTML message.
+Plain text in a **project topic** (`app`, `www`, `admin`, `email`, `cursor-bridge`, …) while phone mode is on becomes a Cursor prompt for that repo. Replies stream via rich drafts when available, then persist as one rich HTML message.
 
 ### Smoke test
 
 1. Status topic → `/status` or `/help`
 2. `/phone_on`
-3. app topic → short prompt → draft then final message
+3. app (or admin/email) topic → short prompt → draft then final message
 4. `/phone_off`
 
 ## Ports
@@ -247,9 +249,15 @@ For **Cursor / Claude Desktop** (local stdio), use the REST API in [AGENT_API.md
 
 ## Project scope
 
-Agents may only work inside **`~/dev/mx/https`**. By default only **`www`** and **`app`** are enabled for new sessions; other subdirectories appear in the list but are disabled.
+Agents may only work inside allowlisted project roots. Default enable list:
+
+`www`, `app`, `admin`, `email`, `cursor-bridge`
+
+Most live under **`~/dev/mx/https/<id>`**. `cursor-bridge` uses `PROJECT_PATH_OVERRIDES` (default `~/dev/cursor-bridge`).
 
 ```bash
+# ENABLED_PROJECTS=www,app,admin,email,cursor-bridge
+# PROJECT_PATH_OVERRIDES=cursor-bridge:/Users/you/dev/cursor-bridge
 curl http://127.0.0.1:4242/api/projects
 ```
 
@@ -347,7 +355,8 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 | `PORT` | `4242` | Listen port |
 | `HOST` | `127.0.0.1` | Bind address |
 | `PROJECTS_ROOT` | `~/dev/mx/https` | Project allowlist root |
-| `ENABLED_PROJECTS` | `www,app` | Comma-separated projects selectable for new sessions |
+| `ENABLED_PROJECTS` | `www,app,admin,email,cursor-bridge` | Comma-separated projects selectable for new sessions |
+| `PROJECT_PATH_OVERRIDES` | `cursor-bridge:~/dev/cursor-bridge` | Absolute path overrides outside `PROJECTS_ROOT` |
 | `SESSION_IDLE_MS` | `1800000` | Session idle timeout (30 min) |
 | `TELEGRAM_BOT_TOKEN` | — | Bot token (outbound + phone console) |
 | `TELEGRAM_CHAT_ID` | — | `Cursor Bridge` forum group id |
@@ -355,6 +364,9 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 | `TELEGRAM_TOPIC_STATUS` | — | Status topic `message_thread_id` |
 | `TELEGRAM_TOPIC_APP` | — | app topic thread id |
 | `TELEGRAM_TOPIC_WWW` | — | www topic thread id |
+| `TELEGRAM_TOPIC_ADMIN` | — | admin topic thread id |
+| `TELEGRAM_TOPIC_EMAIL` | — | email topic thread id |
+| `TELEGRAM_TOPIC_CURSOR_BRIDGE` | — | cursor-bridge topic thread id |
 | `TELEGRAM_ALLOWED_USER_IDS` | — | Optional allowlist (comma-separated) |
 | `TELEGRAM_WEBHOOK_PUBLIC_URL` | derived from `TELEGRAM_TUNNEL_HOST` | Full webhook URL |
 | `TELEGRAM_TUNNEL_HOST` | `cursor-bridge.kairose.com` | Dedicated Cloudflare hostname → `:4242` |

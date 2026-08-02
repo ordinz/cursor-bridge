@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
  * Print recent Telegram updates so you can copy chat id + topic thread ids
- * after posting a message in Status / app / www topics of the Cursor Bridge group.
+ * after posting in Cursor Bridge forum topics (or after createForumTopic).
  *
  * Usage: pnpm telegram:setup-topics
  */
 import "dotenv/config";
-import { getTelegramBotToken, telegramApi } from "../server/telegram.js";
+import {
+  getTelegramBotToken,
+  telegramApi,
+  telegramTopicEnvKey,
+} from "../server/telegram.js";
 
 const token = getTelegramBotToken();
 if (!token) {
@@ -17,10 +21,10 @@ if (!token) {
 const updates = await telegramApi("getUpdates", { limit: 50, timeout: 0 });
 if (!Array.isArray(updates) || updates.length === 0) {
   console.log(
-    "No updates. Send a message in each forum topic (Status, app, www), then re-run.",
+    "No updates. Prefer: pnpm telegram:create-topics (creates Status + project topics).",
   );
   console.log(
-    "(If a webhook is already set, delete it first: open Bot API deleteWebhook, or temporarily unset and restart.)",
+    "Or send a message in each topic, then re-run. If a webhook is set, deleteWebhook first.",
   );
   process.exit(0);
 }
@@ -52,16 +56,13 @@ for (const row of seen.values()) {
   console.log(`  chat:  ${row.chatTitle}`);
   console.log(`  TELEGRAM_CHAT_ID=${row.chatId}`);
   if (row.threadId != null) {
+    const hint = (row.topicName || row.sampleText || "").trim();
     console.log(
       `  thread_id=${row.threadId}${row.topicName ? ` (${row.topicName})` : ""}`,
     );
-    const hint = (row.topicName || row.sampleText || "").toLowerCase();
-    if (hint.includes("status")) {
-      console.log(`  → TELEGRAM_TOPIC_STATUS=${row.threadId}`);
-    } else if (hint === "app" || hint.startsWith("app ")) {
-      console.log(`  → TELEGRAM_TOPIC_APP=${row.threadId}`);
-    } else if (hint === "www" || hint.startsWith("www ")) {
-      console.log(`  → TELEGRAM_TOPIC_WWW=${row.threadId}`);
+    if (hint) {
+      const label = hint.toLowerCase() === "status" ? "status" : hint.toLowerCase();
+      console.log(`  → ${telegramTopicEnvKey(label)}=${row.threadId}`);
     }
   } else {
     console.log("  thread_id=(none — General / non-forum)");
@@ -73,3 +74,4 @@ for (const row of seen.values()) {
 console.log(
   "Paste the matching TELEGRAM_CHAT_ID and TELEGRAM_TOPIC_* values into .env",
 );
+console.log("Or run: pnpm telegram:create-topics");

@@ -17,6 +17,7 @@
     "test": "node --test server/*.test.js",
     "telegram:set-webhook": "node scripts/telegram-set-webhook.mjs",
     "telegram:setup-topics": "node scripts/telegram-setup-topics.mjs",
+    "telegram:create-topics": "node scripts/telegram-create-topics.mjs",
     "telegram:set-commands": "node scripts/telegram-set-commands.mjs"
   },
   "keywords": [],

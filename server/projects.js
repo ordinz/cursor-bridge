@@ -6,11 +6,45 @@ export const PROJECTS_ROOT = path.resolve(
 );
 
 export const ENABLED_PROJECT_IDS = (
-  process.env.ENABLED_PROJECTS ?? "www,app"
+  process.env.ENABLED_PROJECTS ?? "www,app,admin,email,cursor-bridge"
 )
   .split(",")
   .map((id) => id.trim())
   .filter(Boolean);
+
+/**
+ * Optional absolute path overrides: `id:/abs/path,id2:/abs/path`
+ * Used for repos that do not live under PROJECTS_ROOT (e.g. cursor-bridge).
+ */
+export function parseProjectPathOverrides(raw = process.env.PROJECT_PATH_OVERRIDES) {
+  const map = {};
+  if (!raw?.trim()) {
+    // Sensible default for local cursor-bridge checkout
+    const bridgeDefault = path.join(process.env.HOME || "", "dev/cursor-bridge");
+    if (fs.existsSync(bridgeDefault)) {
+      map["cursor-bridge"] = bridgeDefault;
+    }
+    return map;
+  }
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) continue;
+    const id = trimmed.slice(0, colon).trim();
+    const abs = trimmed.slice(colon + 1).trim();
+    if (!id || !abs) continue;
+    map[id] = path.resolve(abs);
+  }
+  return map;
+}
+
+const PATH_OVERRIDES = parseProjectPathOverrides();
+
+function projectDir(projectId) {
+  if (PATH_OVERRIDES[projectId]) return PATH_OVERRIDES[projectId];
+  return path.resolve(PROJECTS_ROOT, projectId);
+}
 
 function isWithinRoot(resolved) {
   return (
@@ -19,18 +53,21 @@ function isWithinRoot(resolved) {
   );
 }
 
+function isAllowedPath(projectId, resolved) {
+  if (PATH_OVERRIDES[projectId] && path.resolve(PATH_OVERRIDES[projectId]) === resolved) {
+    return true;
+  }
+  return isWithinRoot(resolved);
+}
+
 export function isProjectEnabled(projectId) {
   return ENABLED_PROJECT_IDS.includes(projectId);
 }
 
 /** Only enabled allowlist entries that exist on disk. */
 export function listProjects() {
-  if (!fs.existsSync(PROJECTS_ROOT)) {
-    return [];
-  }
-
   return ENABLED_PROJECT_IDS.map((id) => {
-    const resolved = path.resolve(PROJECTS_ROOT, id);
+    const resolved = projectDir(id);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       return null;
     }
@@ -64,9 +101,9 @@ export function resolveProject(projectId, { requireEnabled = true } = {}) {
     );
   }
 
-  const resolved = path.resolve(PROJECTS_ROOT, projectId);
+  const resolved = projectDir(projectId);
 
-  if (!isWithinRoot(resolved)) {
+  if (!isAllowedPath(projectId, resolved)) {
     throw new ProjectError("project outside allowlist", 400);
   }
 

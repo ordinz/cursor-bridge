@@ -28,15 +28,22 @@ const projectRunLocks = new Map();
 function topicLabel(threadId) {
   const map = getTelegramTopicMap();
   if (threadId == null) return "general";
-  if (threadId === map.status) return "status";
-  if (threadId === map.app) return "app";
-  if (threadId === map.www) return "www";
+  for (const [label, id] of Object.entries(map)) {
+    if (id != null && id === threadId) return label;
+  }
   return null;
 }
 
 function projectForTopic(label) {
-  if (label === "app" || label === "www") return label;
-  return null;
+  if (!label || label === "status" || label === "general") return null;
+  return label;
+}
+
+function projectTopicNames() {
+  const map = getTelegramTopicMap();
+  return Object.entries(map)
+    .filter(([label, id]) => label !== "status" && id != null)
+    .map(([label]) => label);
 }
 
 async function reply(threadId, text, { rich = false } = {}) {
@@ -56,6 +63,10 @@ async function reply(threadId, text, { rich = false } = {}) {
 }
 
 function helpText() {
+  const projects = projectTopicNames();
+  const projectList = projects.length
+    ? projects.map((p) => `**${p}**`).join(" / ")
+    : "**app** / **www** / **admin** / **email**…";
   const lines = [
     "**Cursor Bridge commands**",
     "",
@@ -63,7 +74,7 @@ function helpText() {
     "",
     "Also accepted: `/phone on` · `/phone off`",
     "",
-    "Prompts: type freely in **app** / **www** topics while phone mode is on.",
+    `Prompts: type freely in ${projectList} topics while phone mode is on.`,
   ];
   return lines.join("\n");
 }
@@ -278,7 +289,10 @@ async function handleCommand(sessions, msg) {
   if (cmd === "/new") {
     const project = projectForTopic(topic);
     if (!project) {
-      await reply(threadId, "use /new inside the app or www topic");
+      await reply(
+        threadId,
+        `use /new inside a project topic (${projectTopicNames().join(", ") || "app, www, …"})`,
+      );
       return;
     }
     if (!isPhoneModeOn()) {
@@ -307,7 +321,7 @@ async function handleCommand(sessions, msg) {
     if (topic === "status" || topic == null) {
       await reply(
         threadId,
-        "Status topic: /phone_on · /phone_off · /status · /stop\nPrompts go in app or www topics.",
+        `Status topic: /phone_on · /phone_off · /status · /stop\nPrompts go in project topics (${projectTopicNames().join(", ") || "app, www, …"}).`,
       );
       return;
     }

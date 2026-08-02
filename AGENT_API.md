@@ -70,7 +70,7 @@ Returns only the enabled allowlist (`www`, `app` by default). Other directories 
 }
 ```
 
-Configure allowlist via `ENABLED_PROJECTS` (default `www,app`).
+Configure allowlist via `ENABLED_PROJECTS` (default `www,app,admin,email,cursor-bridge`). Use `PROJECT_PATH_OVERRIDES` for repos outside `~/dev/mx/https` (e.g. `cursor-bridge`).
 
 ---
 

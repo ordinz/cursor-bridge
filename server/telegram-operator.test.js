@@ -68,23 +68,35 @@ test("resolveWebhookPublicUrl uses TELEGRAM_TUNNEL_HOST by default", () => {
 });
 
 test("getTelegramTopicMap parses topic env ids", () => {
-  const prev = {
-    status: process.env.TELEGRAM_TOPIC_STATUS,
-    app: process.env.TELEGRAM_TOPIC_APP,
-    www: process.env.TELEGRAM_TOPIC_WWW,
-  };
+  const prevKeys = Object.keys(process.env).filter((k) =>
+    k.startsWith("TELEGRAM_TOPIC_"),
+  );
+  const prev = Object.fromEntries(prevKeys.map((k) => [k, process.env[k]]));
+  for (const k of prevKeys) delete process.env[k];
+
   process.env.TELEGRAM_TOPIC_STATUS = "11";
   process.env.TELEGRAM_TOPIC_APP = "22";
   process.env.TELEGRAM_TOPIC_WWW = "33";
+  process.env.TELEGRAM_TOPIC_ADMIN = "44";
+  process.env.TELEGRAM_TOPIC_EMAIL = "55";
+  process.env.TELEGRAM_TOPIC_CURSOR_BRIDGE = "66";
   assert.deepEqual(getTelegramTopicMap(), {
     status: 11,
     app: 22,
     www: 33,
+    admin: 44,
+    email: 55,
+    "cursor-bridge": 66,
   });
+
+  for (const k of Object.keys(process.env).filter((x) =>
+    x.startsWith("TELEGRAM_TOPIC_"),
+  )) {
+    delete process.env[k];
+  }
   for (const [k, v] of Object.entries(prev)) {
-    const key = `TELEGRAM_TOPIC_${k.toUpperCase()}`;
-    if (v === undefined) delete process.env[key];
-    else process.env[key] = v;
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
 });
 

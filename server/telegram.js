@@ -44,18 +44,47 @@ export function getTelegramWebhookSecret() {
   return process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
 }
 
-/** @returns {{ status: number|null, app: number|null, www: number|null }} */
+/** Env key for a topic label: status → TELEGRAM_TOPIC_STATUS, cursor-bridge → TELEGRAM_TOPIC_CURSOR_BRIDGE */
+export function telegramTopicEnvKey(label) {
+  return `TELEGRAM_TOPIC_${String(label).toUpperCase().replace(/-/g, "_")}`;
+}
+
+/**
+ * Map of topic label → message_thread_id from TELEGRAM_TOPIC_* env vars.
+ * Always includes status/app/www keys (null when unset) plus any other TELEGRAM_TOPIC_* present.
+ * @returns {Record<string, number|null>}
+ */
 export function getTelegramTopicMap() {
   const parse = (value) => {
     if (!value?.trim()) return null;
     const n = Number(value.trim());
     return Number.isFinite(n) ? n : null;
   };
-  return {
+
+  /** @type {Record<string, number|null>} */
+  const map = {
     status: parse(process.env.TELEGRAM_TOPIC_STATUS),
     app: parse(process.env.TELEGRAM_TOPIC_APP),
     www: parse(process.env.TELEGRAM_TOPIC_WWW),
   };
+
+  for (const [key, value] of Object.entries(process.env)) {
+    const match = key.match(/^TELEGRAM_TOPIC_(.+)$/);
+    if (!match) continue;
+    const label = match[1].toLowerCase().replace(/_/g, "-");
+    if (label in map && map[label] != null) continue;
+    map[label] = parse(value);
+  }
+
+  return map;
+}
+
+/** Project topic labels that have a configured thread id (excludes status). */
+export function getConfiguredProjectTopics() {
+  const map = getTelegramTopicMap();
+  return Object.entries(map)
+    .filter(([label, id]) => label !== "status" && id != null)
+    .map(([label]) => label);
 }
 
 /** @returns {Set<number>} empty = allow any member of the configured chat */
@@ -337,7 +366,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "phone_off", description: "Disable phone mode" },
   { command: "status", description: "Bridge health, sessions, phone mode" },
   { command: "stop", description: "Cancel active Cursor run(s)" },
-  { command: "new", description: "New session in this app/www topic" },
+  { command: "new", description: "New session in this project topic" },
   { command: "help", description: "List commands" },
 ];
 
