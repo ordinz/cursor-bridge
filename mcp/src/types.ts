@@ -18,6 +18,7 @@ export interface HealthResponse {
     sessionCount: number;
   };
   telegram: {
+    enabled?: boolean;
     configured: boolean;
     webhookConfigured?: boolean;
     phoneMode?: boolean;

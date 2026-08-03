@@ -18,7 +18,11 @@ import {
   maybeSetTelegramWebhookOnBoot,
 } from "./server/telegram-operator.js";
 import { startIdeAgentMirror } from "./server/telegram-ide-mirror.js";
-import { isPhoneModeOn } from "./server/telegram-phone.js";
+import { isPhoneModeOn, setPhoneMode } from "./server/telegram-phone.js";
+import {
+  deleteTelegramWebhook,
+  isTelegramEnabled,
+} from "./server/telegram.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4242);
@@ -78,6 +82,24 @@ process.on("SIGTERM", shutdown);
 app.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);
   console.log(`📁 Projects root: ${PROJECTS_ROOT}`);
+  if (!isTelegramEnabled()) {
+    console.log("📴 Telegram disabled (TELEGRAM_ENABLED=0) — no outbound sends");
+    if (isPhoneModeOn()) {
+      setPhoneMode(false);
+      console.log("📴 phone mode forced OFF");
+    }
+    void deleteTelegramWebhook()
+      .then((r) => {
+        if (r.ok) console.log("📴 Telegram webhook cleared");
+      })
+      .catch((err) => {
+        console.warn(
+          "[telegram] deleteWebhook on boot failed:",
+          err instanceof Error ? err.message : err,
+        );
+      });
+    return;
+  }
   void maybeSetTelegramWebhookOnBoot();
   if (isPhoneModeOn()) {
     console.log("📲 phone mode already ON — starting IDE agent mirror");

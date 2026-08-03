@@ -400,6 +400,35 @@ test("POST /telegram/send returns 503 when not configured", async () => {
   }
 });
 
+test("POST /telegram/send returns 503 when TELEGRAM_ENABLED=0", async () => {
+  const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  const prevEnabled = process.env.TELEGRAM_ENABLED;
+  process.env.TELEGRAM_BOT_TOKEN = "test-token";
+  process.env.TELEGRAM_CHAT_ID = "-100123";
+  process.env.TELEGRAM_ENABLED = "0";
+
+  try {
+    await withTestServer(async ({ base }) => {
+      const res = await fetch(`${base}/telegram/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "hello" }),
+      });
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.equal(body.code, "TELEGRAM_NOT_CONFIGURED");
+    });
+  } finally {
+    if (prevToken !== undefined) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+    else delete process.env.TELEGRAM_BOT_TOKEN;
+    if (prevChat !== undefined) process.env.TELEGRAM_CHAT_ID = prevChat;
+    else delete process.env.TELEGRAM_CHAT_ID;
+    if (prevEnabled !== undefined) process.env.TELEGRAM_ENABLED = prevEnabled;
+    else delete process.env.TELEGRAM_ENABLED;
+  }
+});
+
 test("POST /telegram rejects empty message", async () => {
   await withTestServer(async ({ base }) => {
     const res = await fetch(`${base}/telegram`, {

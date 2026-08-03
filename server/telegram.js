@@ -20,15 +20,31 @@ export class TelegramSendError extends Error {
   }
 }
 
+/**
+ * Master switch. Set TELEGRAM_ENABLED=0 (or false/off/no) to disable all
+ * Telegram I/O while leaving tokens in .env for later.
+ */
+export function isTelegramEnabled() {
+  const v = process.env.TELEGRAM_ENABLED?.trim().toLowerCase();
+  if (v === "0" || v === "false" || v === "off" || v === "no") return false;
+  return true;
+}
+
 export function isTelegramConfigured() {
-  return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+  return (
+    isTelegramEnabled() &&
+    Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID)
+  );
 }
 
 export function isTelegramWebhookConfigured() {
-  return Boolean(
-    process.env.TELEGRAM_BOT_TOKEN &&
-      process.env.TELEGRAM_CHAT_ID &&
-      process.env.TELEGRAM_WEBHOOK_SECRET,
+  return (
+    isTelegramEnabled() &&
+    Boolean(
+      process.env.TELEGRAM_BOT_TOKEN &&
+        process.env.TELEGRAM_CHAT_ID &&
+        process.env.TELEGRAM_WEBHOOK_SECRET,
+    )
   );
 }
 
@@ -121,6 +137,9 @@ function sleep(ms) {
  * @param {{ retries?: number }} [opts]
  */
 export async function telegramApi(method, body, opts = {}) {
+  if (!isTelegramEnabled() && !opts.allowWhenDisabled) {
+    throw new TelegramNotConfiguredError();
+  }
   const retries = opts.retries ?? 2;
   const token = getTelegramBotToken();
   if (!token) {
@@ -143,7 +162,10 @@ export async function telegramApi(method, body, opts = {}) {
     if (retries > 0 && (res.status === 429 || retryAfter)) {
       const waitSec = retryAfter ? Number(retryAfter[1]) : 3;
       await sleep(Math.min(Math.max(waitSec, 1), 60) * 1000);
-      return telegramApi(method, body, { retries: retries - 1 });
+      return telegramApi(method, body, {
+        retries: retries - 1,
+        allowWhenDisabled: opts.allowWhenDisabled,
+      });
     }
     throw new TelegramSendError(`Telegram API error: ${detail}`);
   }
@@ -201,7 +223,7 @@ function chunkText(text, max) {
 
 function requireChat(opts) {
   const chatId = opts.chatId ?? getTelegramChatId();
-  if (!getTelegramBotToken() || !chatId) {
+  if (!isTelegramEnabled() || !getTelegramBotToken() || !chatId) {
     throw new TelegramNotConfiguredError();
   }
   return chatId;
@@ -461,7 +483,7 @@ export async function answerTelegramCallbackQuery(opts) {
 export async function setTelegramWebhook(opts = {}) {
   const url = opts.url ?? resolveWebhookPublicUrl();
   const secret = opts.secret ?? getTelegramWebhookSecret();
-  if (!getTelegramBotToken()) {
+  if (!isTelegramEnabled() || !getTelegramBotToken()) {
     throw new TelegramNotConfiguredError();
   }
   if (!secret) {
@@ -476,6 +498,17 @@ export async function setTelegramWebhook(opts = {}) {
     drop_pending_updates: false,
   });
   return { ok: true, url };
+}
+
+/** Clear the Bot API webhook so Telegram stops delivering updates. */
+export async function deleteTelegramWebhook() {
+  if (!getTelegramBotToken()) {
+    return { ok: false, skipped: true };
+  }
+  await telegramApi("deleteWebhook", { drop_pending_updates: true }, {
+    allowWhenDisabled: true,
+  });
+  return { ok: true };
 }
 
 /**
