@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
+  ApiError,
   cancelSession,
   createSession,
   getAgentHistory,
@@ -339,7 +340,14 @@ export function useChatSession() {
         }
         setRunStatus((prev) => (prev === "running" ? "idle" : prev));
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Chat failed";
+        let message = err instanceof Error ? err.message : "Chat failed";
+        if (
+          (err instanceof ApiError && err.code === "SESSION_BUSY") ||
+          /already has (?:an )?active run/i.test(message)
+        ) {
+          message =
+            "Still working on the previous message — tap Stop, or wait for it to finish.";
+        }
         setError(message);
         setFeed((items) => [
           ...items,

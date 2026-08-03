@@ -11,6 +11,7 @@ test("TELEGRAM_BOT_COMMANDS has unique valid names", () => {
   }
   assert.ok(names.includes("phone_on"));
   assert.ok(names.includes("settings"));
+  assert.ok(names.includes("ui"));
   assert.ok(names.includes("help"));
 });
 

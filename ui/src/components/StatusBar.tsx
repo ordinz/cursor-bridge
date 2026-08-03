@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Session } from "../lib/types";
+import { cn } from "../lib/utils";
 
 interface StatusBarProps {
   session: Session | null;
@@ -7,6 +8,7 @@ interface StatusBarProps {
   apiOk: boolean;
   cursorReady: boolean;
   bridgeVersion?: string;
+  className?: string;
 }
 
 export function StatusBar({
@@ -15,6 +17,7 @@ export function StatusBar({
   apiOk,
   cursorReady,
   bridgeVersion,
+  className,
 }: StatusBarProps) {
   const [host, setHost] = useState("localhost:4242");
 
@@ -24,8 +27,16 @@ export function StatusBar({
 
   return (
     <footer
-      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-800 bg-zinc-950 px-3 py-1.5 font-mono text-[10px] text-zinc-500 sm:px-4 sm:py-2 sm:text-[11px] lg:gap-x-4"
+      className={cn(
+        "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-800 bg-zinc-950 px-3 py-1.5 font-mono text-[10px] text-zinc-500 sm:px-4 sm:py-2 sm:text-[11px] lg:gap-x-4",
+        className,
+      )}
+      data-component="StatusBar"
       data-testid="status-bar"
+      data-section="status"
+      data-state={
+        !apiOk ? "bridge-down" : !cursorReady ? "cursor-not-ready" : "ok"
+      }
     >
       <span data-testid="status-port">{host}</span>
       <span className={apiOk ? "text-emerald-600" : "text-red-500"}>

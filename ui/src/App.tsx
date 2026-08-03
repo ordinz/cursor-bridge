@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryStates } from "nuqs";
 import { getHealth, getDevStatus } from "./lib/api";
 import type { DevStatus, HealthResponse } from "./lib/types";
+import { consoleUrlParsers, type MobilePanel } from "./lib/url-state";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { InstructionsPanel } from "./components/InstructionsPanel";
-import {
-  MobileTabBar,
-  type MobilePanel,
-} from "./components/MobileTabBar";
+import { MobileTabBar } from "./components/MobileTabBar";
 import { OversightControls } from "./components/OversightControls";
 import { PromptInput } from "./components/PromptInput";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { StatusBar } from "./components/StatusBar";
+import { TraceabilityInspector } from "./components/dev/TraceabilityInspector";
 import { useAgentHistory } from "./hooks/useAgentHistory";
 import { useChatSession, SESSION_STORAGE_KEY } from "./hooks/useChatSession";
 import { useModels } from "./hooks/useModels";
@@ -20,10 +20,23 @@ export default function App() {
   const { projects, loading: projectsLoading } = useProjects();
   const { models, selectedModel, selectModel, loading: modelsLoading } =
     useModels();
-  const [project, setProject] = useState("app");
+  const [{ project, tab: mobilePanel, agent: urlAgent }, setUrlState] =
+    useQueryStates(
+      {
+        project: consoleUrlParsers.project,
+        tab: consoleUrlParsers.tab,
+        agent: consoleUrlParsers.agent,
+      },
+      { history: "replace" },
+    );
+  const setMobilePanel = useCallback(
+    (next: MobilePanel) => {
+      void setUrlState({ tab: next });
+    },
+    [setUrlState],
+  );
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [devStatus, setDevStatus] = useState<DevStatus | null>(null);
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("instructions");
 
   const apiOk = health?.ok ?? false;
   const cursorReady = health?.cursor.ready ?? false;
@@ -48,6 +61,27 @@ export default function App() {
     stopRun,
     clearSession,
   } = useChatSession();
+
+  const setProject = useCallback(
+    (next: string) => {
+      if (next === project) return;
+      clearSession();
+      void setUrlState({ project: next, agent: null });
+    },
+    [project, clearSession, setUrlState],
+  );
+
+  const setUrlAgent = useCallback(
+    (agentId: string | null) => {
+      void setUrlState({ agent: agentId });
+    },
+    [setUrlState],
+  );
+
+  const topic = useMemo(() => {
+    const name = session?.name?.trim();
+    return name || "New chat";
+  }, [session?.name]);
 
   useEffect(() => {
     const enabled = projects.filter((p) => p.canCreateSession !== false);
@@ -87,16 +121,39 @@ export default function App() {
     if (runStatus === "running") {
       setMobilePanel("feed");
     }
-  }, [runStatus]);
+  }, [runStatus, setMobilePanel]);
 
+  // Session is source of truth while active — push agent id into the URL.
   useEffect(() => {
-    if (!session && feed.length === 0) {
-      setMobilePanel("instructions");
-    }
-  }, [session, feed.length]);
+    if (!session?.agentId) return;
+    if (urlAgent === session.agentId) return;
+    setUrlAgent(session.agentId);
+  }, [session?.agentId, urlAgent, setUrlAgent]);
 
+  // Resume when URL has an agent and we don't have a live session yet.
   useEffect(() => {
-    if (projectsLoading || session) return;
+    if (projectsLoading || session || !urlAgent) return;
+
+    let cancelled = false;
+    void resumeAgent(urlAgent, project, selectedModel).catch(() => {
+      if (!cancelled) setUrlAgent(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    projectsLoading,
+    session,
+    urlAgent,
+    project,
+    selectedModel,
+    resumeAgent,
+    setUrlAgent,
+  ]);
+
+  // One-shot migrate: old localStorage session → URL when no ?agent=.
+  useEffect(() => {
+    if (projectsLoading || session || urlAgent) return;
 
     const raw = localStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return;
@@ -105,44 +162,34 @@ export default function App() {
       const stored = JSON.parse(raw) as {
         agentId: string;
         project: string;
-        model?: string;
       };
       if (stored.project !== project) return;
-      void resumeAgent(
-        stored.agentId,
-        stored.project,
-        stored.model ?? selectedModel,
-      );
+      setUrlAgent(stored.agentId);
     } catch {
       localStorage.removeItem(SESSION_STORAGE_KEY);
     }
-  }, [projectsLoading, session, project, selectedModel, resumeAgent]);
+  }, [projectsLoading, session, urlAgent, project, setUrlAgent]);
 
   useEffect(() => {
     if (!session?.name) return;
     void refreshAgents();
   }, [session?.name, refreshAgents]);
 
-  const handleNewSession = useCallback(async () => {
-    try {
-      await startSession(project, selectedModel);
-      setMobilePanel("feed");
-      void refreshAgents();
-    } catch (err) {
-      console.error(err);
-    }
-  }, [project, selectedModel, startSession, refreshAgents]);
+  const handleNewSession = useCallback(() => {
+    clearSession();
+    void setUrlState({ agent: null, tab: "feed" });
+  }, [clearSession, setUrlState]);
 
   const handleResumeAgent = useCallback(
     async (agentId: string) => {
-      try {
-        await resumeAgent(agentId, project, selectedModel);
+      if (session?.agentId === agentId) {
         setMobilePanel("feed");
-      } catch (err) {
-        console.error(err);
+        return;
       }
+      clearSession();
+      await setUrlState({ agent: agentId, tab: "feed" });
     },
-    [project, selectedModel, resumeAgent],
+    [session?.agentId, clearSession, setUrlState, setMobilePanel],
   );
 
   const handlePromptSend = useCallback(
@@ -157,54 +204,87 @@ export default function App() {
       });
       void refreshAgents();
     },
-    [session, project, selectedModel, startSession, sendPrompt, refreshAgents],
+    [
+      session,
+      project,
+      selectedModel,
+      startSession,
+      sendPrompt,
+      refreshAgents,
+      setMobilePanel,
+    ],
+  );
+
+  const handleTldr = useCallback(
+    (text: string) => {
+      const excerpt = text.trim().slice(0, 6000);
+      void handlePromptSend(
+        [
+          "TLDR the message below into a short compact summary.",
+          "Use a few bullets or 2–3 sentences. Do not redo the work — only compress what was already said.",
+          "",
+          "<<<",
+          excerpt,
+          ">>>",
+        ].join("\n"),
+        { includeDevLogs: false },
+      );
+    },
+    [handlePromptSend],
   );
 
   const handleDeleteAgent = useCallback(
     async (agentId: string) => {
-      const agent = agents.find((a) => a.agentId === agentId);
-      const label = agent?.name?.trim() || agentId.slice(0, 16);
-      if (
-        !window.confirm(
-          `Delete agent "${label}"?\n\nThis permanently removes its conversation history and cannot be undone.`,
-        )
-      ) {
-        return;
-      }
-
       try {
         await deleteHistoryAgent(agentId);
-        if (session?.agentId === agentId) {
+        if (session?.agentId === agentId || urlAgent === agentId) {
           clearSession();
+          await setUrlState({ agent: null });
         }
       } catch (err) {
         console.error(err);
       }
     },
-    [agents, deleteHistoryAgent, session, clearSession],
+    [deleteHistoryAgent, session, urlAgent, clearSession, setUrlState],
   );
 
   const running = runStatus === "running";
+  const activeAgentId = session?.agentId ?? urlAgent;
 
   const conversationContent = (
     <>
       {projectsLoading && (
-        <div className="p-4 text-sm text-zinc-500">Loading projects…</div>
+        <div
+          className="p-4 text-sm text-zinc-500"
+          data-testid="projects-loading"
+          data-section="projects-loading"
+        >
+          Loading projects…
+        </div>
       )}
       {error && (
-        <div className="border-b border-red-900/40 bg-red-950/20 px-4 py-2 text-sm text-red-300">
+        <div
+          className="border-b border-red-900/40 bg-red-950/20 px-4 py-2 text-sm text-red-300"
+          data-testid="console-error"
+          data-section="error"
+          role="alert"
+        >
           {error}
         </div>
       )}
       {historyLoading && (
-        <div className="border-b border-zinc-800 px-4 py-2 text-sm text-zinc-500">
+        <div
+          className="border-b border-zinc-800 px-4 py-2 text-sm text-zinc-500"
+          data-testid="history-loading"
+          data-section="history-loading"
+        >
           Loading conversation history…
         </div>
       )}
       <ActivityFeed
         items={feed}
         running={running}
-        onOpenInstructions={() => setMobilePanel("instructions")}
+        onTldr={handleTldr}
       />
       <PromptInput
         disabled={!apiOk || !cursorReady || running}
@@ -219,18 +299,26 @@ export default function App() {
     <div
       className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-zinc-950 text-zinc-100"
       aria-label="cursor-bridge agent console"
+      data-component="AgentConsole"
+      data-testid="agent-console"
+      data-page="ui"
+      data-state={running ? "running" : runStatus}
     >
+      <TraceabilityInspector />
       <OversightControls
         session={session}
         project={project}
+        topic={topic}
         projects={projects}
         models={models}
         model={selectedModel}
         modelsLoading={modelsLoading}
         runStatus={runStatus}
+        apiOk={apiOk}
+        cursorReady={cursorReady}
         onProjectChange={setProject}
         onModelChange={selectModel}
-        onNewSession={() => void handleNewSession()}
+        onNewSession={handleNewSession}
         onStop={() => void stopRun()}
       />
 
@@ -240,7 +328,7 @@ export default function App() {
           agents={agents}
           agentsLoading={agentsLoading}
           deletingId={deletingId}
-          activeAgentId={session?.agentId}
+          activeAgentId={activeAgentId}
           onResumeAgent={(id) => void handleResumeAgent(id)}
           onDeleteAgent={(id) => void handleDeleteAgent(id)}
           className={
@@ -257,6 +345,9 @@ export default function App() {
               : "flex min-w-0 flex-1 flex-col overflow-hidden"
           }
           aria-label="Conversation"
+          data-component="ConversationPanel"
+          data-testid="conversation-panel"
+          data-section="conversation"
         >
           {conversationContent}
         </main>
@@ -276,6 +367,7 @@ export default function App() {
         apiOk={apiOk}
         cursorReady={cursorReady}
         bridgeVersion={health?.version}
+        className="hidden lg:flex"
       />
 
       <MobileTabBar active={mobilePanel} onChange={setMobilePanel} />

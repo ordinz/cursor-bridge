@@ -167,6 +167,32 @@ export async function cancelStaleAgentRuns(agentId, cwd) {
   return cancelled;
 }
 
+export function isAgentBusyError(err) {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  return /already has (?:an )?active run/i.test(msg);
+}
+
+/**
+ * agent.send with one retry after clearing stale Cursor runs.
+ * Matches Telegram operator behavior so the UI doesn't surface ghost "busy" errors.
+ */
+export async function sendAgentMessage(agent, sendMessage, opts, meta = {}) {
+  try {
+    return opts === undefined
+      ? await agent.send(sendMessage)
+      : await agent.send(sendMessage, opts);
+  } catch (err) {
+    if (!isAgentBusyError(err)) throw err;
+    const { agentId, cwd } = meta;
+    if (!agentId || !cwd) throw err;
+    const cleared = await cancelStaleAgentRuns(agentId, cwd);
+    if (cleared <= 0) throw err;
+    return opts === undefined
+      ? await agent.send(sendMessage)
+      : await agent.send(sendMessage, opts);
+  }
+}
+
 export async function deleteLocalAgent(agentId, project) {
   const cwd = resolveProject(project);
   await cancelStaleAgentRuns(agentId, cwd);

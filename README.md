@@ -191,9 +191,23 @@ pnpm telegram:set-webhook
 | `/status` | Health, sessions, IDE mirror |
 | `/stop` | Cancel active run(s) for this topic’s project (or all from Status) |
 | `/new` | Fresh session in the current project topic |
+| `/ui` | Open this agent in the web UI (tunnel deep link) |
 | `/help` | List commands |
 
 Also accepted when typed: `/phone on` · `/phone off`.
+
+#### Deep links (Telegram ↔ web UI)
+
+With phone mode on and a bound agent topic:
+
+- **Web → Telegram:** oversight header shows **Open in Telegram** when the session has a forum topic (`t.me/c/…`).
+- **Telegram → Web:** post-run **Open in UI** button, or `/ui` in an agent topic → `https://ordins-cursor-bridge.kairose.com/?project=…&agent=…` (override with `BRIDGE_UI_ORIGIN`). Requires Vite on `:5173` (your Cloudflare published app). Cloudflare Access may prompt once on the phone browser.
+
+Re-register slash commands after adding `/ui`:
+
+```bash
+pnpm telegram:set-commands
+```
 
 #### IDE agent mirror (`/phone_on`)
 
@@ -384,6 +398,7 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 | `TELEGRAM_ALLOWED_USER_IDS` | — | Optional allowlist (comma-separated) |
 | `TELEGRAM_WEBHOOK_PUBLIC_URL` | derived from `TELEGRAM_TUNNEL_HOST` | Full webhook URL |
 | `TELEGRAM_TUNNEL_HOST` | `cursor-bridge.kairose.com` | Dedicated Cloudflare hostname → `:4242` |
+| `BRIDGE_UI_ORIGIN` | `https://ordins-cursor-bridge.kairose.com` | Public UI origin for Telegram `/ui` + Open in UI |
 | `TUNNEL_HOST` | `mbp.thematrixofdestiny.com` | SwiftBar app-tunnel poller only |
 | `TELEGRAM_SET_WEBHOOK_ON_BOOT` | `1` | Set `0` to skip auto `setWebhook` |
 

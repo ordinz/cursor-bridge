@@ -1,5 +1,5 @@
 import { nameFromPrompt } from "./agent-names.js";
-import { finalizeAgentName, cancelStaleAgentRuns } from "./agents.js";
+import { finalizeAgentName, cancelStaleAgentRuns, sendAgentMessage } from "./agents.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
 import { buildPromptWithDevLogs } from "./dev-logs.js";
 import { createSseEvent } from "./sse-events.js";
@@ -28,10 +28,12 @@ import { buildTelegramRichContent } from "./telegram-format.js";
 import {
   mainControlKeyboard,
   modelPickerKeyboard,
+  openUiKeyboard,
   parseCallbackData,
   postRunKeyboard,
   settingsKeyboard,
 } from "./telegram-keyboards.js";
+import { uiSessionUrl } from "./telegram-deeplinks.js";
 import {
   catchUpAgentHistory,
   claimIdeMirrorRun,
@@ -185,6 +187,15 @@ function controlsKeyboard() {
   return mainControlKeyboard({ phoneOn: isPhoneModeOn() });
 }
 
+/** @param {{ project?: string, agentId?: string }|null|undefined} detail @param {{ busy?: boolean }} [opts] */
+function actionsKeyboard(detail, { busy = false } = {}) {
+  return postRunKeyboard({
+    busy,
+    project: detail?.project ?? null,
+    agentId: detail?.agentId ?? null,
+  });
+}
+
 function currentSettingsKeyboard() {
   const prefs = getTelegramPrefs();
   return settingsKeyboard(prefs);
@@ -200,27 +211,16 @@ function toolProgressLabel(event) {
   return `using ${name}…`;
 }
 
-function isAgentBusyError(err) {
-  const msg = err instanceof Error ? err.message : String(err || "");
-  return /already has (?:an )?active run/i.test(msg);
-}
-
 /**
  * @param {{ agent: object, agentId: string, cwd: string }} record
  * @param {string|object} sendMessage
  * @param {{ model: object, mode: string }} opts
  */
-async function sendAgentMessage(record, sendMessage, opts) {
-  try {
-    return await record.agent.send(sendMessage, opts);
-  } catch (err) {
-    if (!isAgentBusyError(err)) throw err;
-    const cleared = await cancelStaleAgentRuns(record.agentId, record.cwd);
-    if (cleared > 0) {
-      return await record.agent.send(sendMessage, opts);
-    }
-    throw err;
-  }
+async function sendTelegramAgentMessage(record, sendMessage, opts) {
+  return sendAgentMessage(record.agent, sendMessage, opts, {
+    agentId: record.agentId,
+    cwd: record.cwd,
+  });
 }
 
 /**
@@ -262,7 +262,7 @@ async function runProjectPrompt(sessions, opts) {
     await reply(
       messageThreadId,
       `session busy (${detail.name || detail.sessionId}). /stop then retry, or wait.`,
-      { replyMarkup: postRunKeyboard({ busy: true }) },
+      { replyMarkup: actionsKeyboard(detail, { busy: true }) },
     );
     return;
   }
@@ -371,7 +371,7 @@ async function runProjectPrompt(sessions, opts) {
       }
     }
 
-    const run = await sendAgentMessage(record, sendMessage, {
+    const run = await sendTelegramAgentMessage(record, sendMessage, {
       model: { id: record.model || prefs.model },
       mode: record.mode === "plan" ? "plan" : "agent",
     });
@@ -400,20 +400,20 @@ async function runProjectPrompt(sessions, opts) {
       sessions.clearActiveRun(id, "cancelled");
       await streamer.finalize();
       await reply(streamThreadId, "cancelled", {
-        replyMarkup: postRunKeyboard({ busy: false }),
+        replyMarkup: actionsKeyboard(record, { busy: false }),
       });
     } else if (outcome.failed) {
       sessions.clearActiveRun(id, "error");
       await streamer.fail("run failed");
       await reply(streamThreadId, "Actions", {
-        replyMarkup: postRunKeyboard({ busy: false }),
+        replyMarkup: actionsKeyboard(record, { busy: false }),
       }).catch(() => {});
     } else {
       sessions.clearActiveRun(id, "idle");
       await streamer.finalize();
       await streamer.noteDone();
       await reply(streamThreadId, "Actions", {
-        replyMarkup: postRunKeyboard({ busy: false }),
+        replyMarkup: actionsKeyboard(record, { busy: false }),
       }).catch(() => {});
 
       if (sessions.scheduleNaming(id)) {
@@ -521,6 +521,48 @@ async function doHelp(threadId) {
     rich: true,
     replyMarkup: controlsKeyboard(),
   });
+}
+
+/**
+ * Surface the web UI deep link for the current agent topic.
+ * @param {number|null} threadId
+ * @param {ReturnType<typeof resolveTelegramThread>} resolved
+ */
+async function doUi(threadId, resolved) {
+  const binding =
+    resolved.kind === "agent" && resolved.binding?.agentId
+      ? resolved.binding
+      : null;
+  if (!binding) {
+    await reply(
+      threadId,
+      "No agent bound to this topic. Open an agent topic (after `/phone_on`) or start one with `/new`, then `/ui`.",
+      { replyMarkup: controlsKeyboard() },
+    );
+    return;
+  }
+  const url = uiSessionUrl({
+    project: binding.project,
+    agentId: binding.agentId,
+  });
+  if (!url) {
+    await reply(threadId, "Could not build UI link (missing project/agent).", {
+      replyMarkup: controlsKeyboard(),
+    });
+    return;
+  }
+  await reply(
+    threadId,
+    `**Open in UI** — ${binding.name || binding.agentId}\n\n${url}`,
+    {
+      rich: true,
+      replyMarkup: openUiKeyboard({
+        project: binding.project,
+        agentId: binding.agentId,
+        uiUrl: url,
+      }),
+    },
+  );
 }
 
 /**
@@ -640,13 +682,13 @@ async function doNew(sessions, ctx) {
     await reply(
       threadId,
       `new ${project} agent → «${topic.name}»\nmode **${prefs.mode}** · model **${modelLabel(prefs.model)}**\nSend prompts in that topic.`,
-      { rich: true, replyMarkup: postRunKeyboard() },
+      { rich: true, replyMarkup: actionsKeyboard(created) },
     );
   } else {
     await reply(
       threadId,
       `new ${project} session ${created.sessionId.slice(0, 8)}… — send a prompt`,
-      { replyMarkup: postRunKeyboard() },
+      { replyMarkup: actionsKeyboard(created) },
     );
   }
 }
@@ -703,6 +745,10 @@ async function handleCommand(sessions, msg) {
       await doHelp(threadId);
       return;
     }
+    if (cmd === "/ui" || cmd === "/web" || cmd === "/open") {
+      await doUi(threadId, resolved);
+      return;
+    }
     if (cmd === "/stop") {
       await doStop(sessions, ctx);
       return;
@@ -752,7 +798,10 @@ async function handleCommand(sessions, msg) {
     let images;
     if (hasMedia) {
       await reply(threadId, hasMediaKindLabel(message), {
-        replyMarkup: postRunKeyboard({ busy: true }),
+        replyMarkup: actionsKeyboard(
+          resolved.kind === "agent" ? resolved.binding : { project },
+          { busy: true },
+        ),
       }).catch(() => {});
       const inbound = await resolveTelegramInboundContent(message, trimmed);
       prompt = inbound.text;

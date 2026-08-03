@@ -19,6 +19,11 @@ export default defineConfig({
       },
     },
   ],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   build: {
     rollupOptions: {
       input: {
@@ -30,6 +35,7 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5173,
+    allowedHosts: ["ordins-cursor-bridge.kairose.com"],
     proxy: {
       "/api": "http://127.0.0.1:4242",
       "/prompt": "http://127.0.0.1:4242",

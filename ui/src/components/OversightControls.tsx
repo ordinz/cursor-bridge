@@ -1,5 +1,13 @@
 import type { Model, Project, Session } from "../lib/types";
 import { TelegramSend } from "./TelegramSend";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 
 const REMOTE_HEALTH_URL = "https://cursor-mcp-bridge.kairose.com/health";
 
@@ -22,14 +30,70 @@ function ExternalLinkIcon({ className }: { className?: string }) {
   );
 }
 
+function TelegramIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M21.8 4.2 2.9 11.4c-1.3.5-1.3 1.2-.2 1.5l4.8 1.5 1.8 5.6c.2.7.4.9 1 .9.6 0 .9-.3 1.2-.6l2.3-2.2 4.8 3.5c.9.5 1.5.2 1.7-.8l3.1-14.7c.3-1.3-.5-1.9-1.4-1.5z" />
+    </svg>
+  );
+}
+
+function PlusIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function HealthDot({
+  ok,
+  warn,
+  label,
+}: {
+  ok: boolean;
+  warn?: boolean;
+  label: string;
+}) {
+  const color = ok
+    ? "bg-emerald-400"
+    : warn
+      ? "bg-amber-400"
+      : "bg-red-500";
+  return (
+    <span
+      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${color}`}
+      title={label}
+      aria-label={label}
+    />
+  );
+}
+
 interface OversightControlsProps {
   session: Session | null;
   project: string;
+  topic: string;
   projects: Project[];
   models: Model[];
   model: string;
   modelsLoading: boolean;
   runStatus: string;
+  apiOk: boolean;
+  cursorReady: boolean;
   onProjectChange: (project: string) => void;
   onModelChange: (model: string) => void;
   onNewSession: () => void;
@@ -39,11 +103,14 @@ interface OversightControlsProps {
 export function OversightControls({
   session,
   project,
+  topic,
   projects,
   models,
   model,
   modelsLoading,
   runStatus,
+  apiOk,
+  cursorReady,
   onProjectChange,
   onModelChange,
   onNewSession,
@@ -53,36 +120,122 @@ export function OversightControls({
 
   return (
     <header
-      className="shrink-0 border-b border-zinc-800 bg-zinc-950 px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4"
+      className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/95 px-3 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur-xl sm:px-4 sm:pb-2.5"
+      data-component="OversightControls"
       data-testid="oversight-controls"
+      data-state={running ? "running" : runStatus}
     >
-      <div className="flex items-center gap-2">
-        <h1 className="text-sm font-semibold text-zinc-200">cursor-bridge</h1>
-        <span className="hidden text-xs text-zinc-600 sm:inline">
-          agent console
-        </span>
-        {running && (
-          <span className="ml-1 rounded bg-amber-950/60 px-1.5 py-0.5 text-[10px] uppercase text-amber-400 lg:hidden">
-            running
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <TelegramSend />
-          <a
-            href={REMOTE_HEALTH_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex min-h-11 items-center justify-center rounded-md border border-zinc-700 px-3 py-2 text-zinc-300 active:bg-zinc-900"
-            aria-label="Open remote health check"
-            data-testid="remote-health-link"
+      <div
+        className="flex items-center gap-2"
+        data-testid="oversight-controls__bar"
+        data-section="header-bar"
+      >
+        <div
+          className="min-w-0 flex-1 text-left"
+          data-testid="chat-identity"
+          data-section="chat-identity"
+        >
+          <div
+            className="flex items-center justify-start gap-1.5"
+            data-testid="chat-identity__title"
           >
-            <ExternalLinkIcon className="h-4 w-4" />
-          </a>
+            <h1
+              className="truncate text-[17px] font-semibold tracking-tight text-zinc-50 lg:text-[15px]"
+              data-testid="chat-topic"
+              title={topic}
+            >
+              {topic}
+            </h1>
+            {running && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 lg:hidden"
+                data-testid="run-status-pill"
+                data-state="running"
+                title="Running"
+                aria-label="Running"
+              />
+            )}
+            {running && (
+              <span
+                className="hidden shrink-0 rounded-full bg-amber-950/70 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400 lg:inline"
+                data-testid="run-status-pill-label"
+                data-state="running"
+              >
+                running
+              </span>
+            )}
+          </div>
+          <p
+            className="mt-0.5 flex items-center justify-start gap-1.5 truncate text-[12px] text-zinc-500 lg:hidden"
+            data-testid="chat-context"
+          >
+            <span
+              className="inline-flex items-center gap-1"
+              data-testid="health-dots"
+              aria-label="Connection status"
+            >
+              <HealthDot
+                ok={apiOk}
+                label={apiOk ? "bridge ok" : "bridge down"}
+              />
+              <HealthDot
+                ok={cursorReady}
+                warn={!cursorReady && apiOk}
+                label={cursorReady ? "cursor ready" : "cursor not ready"}
+              />
+            </span>
+          </p>
+        </div>
+
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-testid="oversight-controls__actions"
+          data-section="header-actions"
+        >
+          <div className="hidden items-center gap-1 lg:flex">
+            {session?.telegramTopicUrl ? (
+              <a
+                href={session.telegramTopicUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-sky-400 active:bg-zinc-800 active:text-sky-300"
+                aria-label="Open in Telegram"
+                title="Open in Telegram"
+                data-testid="open-telegram-topic-link"
+              >
+                <TelegramIcon className="h-4 w-4" />
+              </a>
+            ) : null}
+            <TelegramSend />
+            <a
+              href={REMOTE_HEALTH_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-zinc-400 active:bg-zinc-800 active:text-zinc-200"
+              aria-label="Open remote health check"
+              data-testid="remote-health-link"
+            >
+              <ExternalLinkIcon className="h-4 w-4" />
+            </a>
+          </div>
+          {session?.telegramTopicUrl ? (
+            <a
+              href={session.telegramTopicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-sky-400 active:bg-zinc-800 lg:hidden"
+              aria-label="Open in Telegram"
+              title="Open in Telegram"
+              data-testid="open-telegram-topic-link-mobile"
+            >
+              <TelegramIcon className="h-5 w-5" />
+            </a>
+          ) : null}
           {running && (
             <button
               type="button"
               onClick={onStop}
-              className="min-h-11 rounded-md bg-red-900/60 px-3 py-2 text-sm font-medium text-red-200 active:bg-red-900"
+              className="min-h-10 rounded-full bg-red-900/60 px-3 text-sm font-medium text-red-200 active:bg-red-900"
               data-testid="stop-button"
             >
               Stop
@@ -91,64 +244,80 @@ export function OversightControls({
           <button
             type="button"
             onClick={onNewSession}
-            className="min-h-11 rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-300 active:bg-zinc-900"
+            className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-sky-400 active:bg-zinc-800 lg:min-w-0 lg:gap-1.5 lg:border lg:border-zinc-700 lg:px-3 lg:text-sm lg:text-zinc-300"
             data-testid="new-session-button"
+            aria-label="New session"
           >
-            New
+            <PlusIcon className="h-5 w-5 lg:h-4 lg:w-4" />
+            <span className="hidden lg:inline">New</span>
           </button>
         </div>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <select
+      <div
+        className="mt-2 grid grid-cols-2 gap-2"
+        data-testid="oversight-controls__selectors"
+        data-section="selectors"
+      >
+        <Select
           value={project}
-          onChange={(e) => onProjectChange(e.target.value)}
-          className="min-h-11 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-2 text-base text-zinc-200 sm:text-sm"
-          data-testid="project-select"
+          onValueChange={(value) => {
+            if (value != null) onProjectChange(value);
+          }}
+          items={projects.map((p) => ({ value: p.id, label: p.name }))}
         >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            className="h-10 min-h-10 w-full rounded-xl text-[15px] data-[size=default]:h-10 sm:text-sm"
+            aria-label="Project"
+            data-testid="project-select"
+          >
+            <SelectValue placeholder="Project" />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} align="start">
+            <SelectGroup>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
 
-        <select
+        <Select
           value={model}
-          onChange={(e) => onModelChange(e.target.value)}
+          onValueChange={(value) => {
+            if (value != null) onModelChange(value);
+          }}
           disabled={modelsLoading || models.length === 0}
-          className="min-h-11 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-2 text-base text-zinc-200 disabled:opacity-50 sm:text-sm"
-          data-testid="model-select"
-          title={
-            session
-              ? "Applies to new sessions; active session keeps its model"
-              : "Model for new sessions"
-          }
+          items={models.map((m) => ({
+            value: m.id,
+            label: m.displayName || m.id,
+          }))}
         >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.displayName || m.id}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {session && (
-        <div className="mt-2 truncate text-xs text-zinc-600">
-          {session.name ?? session.sessionId.slice(0, 8)}… · {session.model} ·{" "}
-          <span
-            className={
-              runStatus === "running"
-                ? "text-amber-400"
-                : runStatus === "error"
-                  ? "text-red-400"
-                  : "text-zinc-500"
+          <SelectTrigger
+            className="h-10 min-h-10 w-full rounded-xl text-[15px] data-[size=default]:h-10 sm:text-sm"
+            aria-label="Model"
+            data-testid="model-select"
+            title={
+              session
+                ? "Applies to new sessions; active session keeps its model"
+                : "Model for new sessions"
             }
           >
-            {runStatus}
-          </span>
-        </div>
-      )}
+            <SelectValue placeholder="Model" />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} align="start">
+            <SelectGroup>
+              {models.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.displayName || m.id}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
     </header>
   );
 }

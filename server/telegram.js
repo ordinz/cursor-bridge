@@ -492,6 +492,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "settings", description: "Model, mode, toggles (inline buttons)" },
   { command: "stop", description: "Cancel active Cursor run(s)" },
   { command: "new", description: "New session in this project topic" },
+  { command: "ui", description: "Open this agent in the web UI" },
   { command: "help", description: "List commands" },
 ];
 

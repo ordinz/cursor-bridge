@@ -73,6 +73,10 @@ export interface Session {
   cwd: string;
   model: string;
   name?: string;
+  /** Forum message_thread_id when phone mode bound a Telegram topic. */
+  telegramThreadId?: number | null;
+  /** Deep link into the agent's Telegram forum topic (`t.me/c/…`). */
+  telegramTopicUrl?: string | null;
   runStatus: RunStatus | string;
   runActive: boolean;
   createdAt: number;

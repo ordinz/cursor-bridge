@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryState } from "nuqs";
 import { getModels } from "../lib/api";
 import type { Model } from "../lib/types";
+import { consoleUrlParsers } from "../lib/url-state";
 
 const FALLBACK_MODELS: Model[] = [
   { id: "default", displayName: "Auto" },
@@ -27,30 +29,40 @@ function resolveAutoId(models: Model[]) {
   return models.find(isAutoModel)?.id ?? AUTO_MODEL_ID;
 }
 
-function pickInitialModel(models: Model[]) {
+function pickFallbackModel(models: Model[]) {
   const autoId = resolveAutoId(models);
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored && models.some((m) => m.id === stored)) {
-    return stored;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && models.some((m) => m.id === stored)) {
+      return stored;
+    }
+  } catch {
+    // ignore
   }
   return autoId;
 }
 
 export function useModels() {
-  const [models, setModels] = useState<Model[]>(FALLBACK_MODELS);
-  const [selectedModel, setSelectedModel] = useState(() =>
-    pickInitialModel(FALLBACK_MODELS),
+  const [urlModel, setUrlModel] = useQueryState(
+    "model",
+    consoleUrlParsers.model,
   );
+  const [models, setModels] = useState<Model[]>(FALLBACK_MODELS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const selectedModel = useMemo(() => {
+    if (urlModel && models.some((m) => m.id === urlModel)) {
+      return urlModel;
+    }
+    return pickFallbackModel(models);
+  }, [urlModel, models]);
 
   useEffect(() => {
     void getModels()
       .then((data) => {
         if (data.models.length > 0) {
-          const sorted = sortModels(data.models);
-          setModels(sorted);
-          setSelectedModel(pickInitialModel(sorted));
+          setModels(sortModels(data.models));
         }
       })
       .catch((err) => {
@@ -59,10 +71,30 @@ export function useModels() {
       .finally(() => setLoading(false));
   }, []);
 
-  const selectModel = useCallback((id: string) => {
-    setSelectedModel(id);
-    localStorage.setItem(STORAGE_KEY, id);
-  }, []);
+  // Persist effective selection; hydrate URL when missing so links stay shareable.
+  useEffect(() => {
+    if (loading) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, selectedModel);
+    } catch {
+      // ignore
+    }
+    if (!urlModel && selectedModel) {
+      void setUrlModel(selectedModel);
+    }
+  }, [loading, selectedModel, urlModel, setUrlModel]);
+
+  const selectModel = useCallback(
+    (id: string) => {
+      void setUrlModel(id);
+      try {
+        localStorage.setItem(STORAGE_KEY, id);
+      } catch {
+        // ignore
+      }
+    },
+    [setUrlModel],
+  );
 
   return { models, selectedModel, selectModel, loading, error };
 }

@@ -52,7 +52,13 @@ export function TelegramForm({
   }, [open, autoFocus]);
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+    <form
+      onSubmit={handleSubmit}
+      className="flex flex-col gap-3"
+      data-component="TelegramForm"
+      data-testid="telegram-form"
+      data-state={configured ? (sending ? "sending" : "ready") : "unconfigured"}
+    >
       <textarea
         ref={inputRef}
         value={message}
@@ -72,17 +78,19 @@ export function TelegramForm({
         <p
           className={`text-xs ${feedback === "Sent" ? "text-emerald-500" : "text-red-400"}`}
           data-testid="telegram-send-feedback"
+          data-state={feedback === "Sent" ? "success" : "error"}
         >
           {feedback}
         </p>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end gap-2" data-section="telegram-actions">
         {showCancel && (
           <button
             type="button"
             onClick={onCancel}
             className="min-h-10 rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 active:bg-zinc-800"
+            data-testid="telegram-cancel-button"
           >
             Cancel
           </button>

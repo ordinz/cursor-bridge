@@ -1,7 +1,11 @@
 import express from "express";
 import { Agent, Cursor } from "@cursor/sdk";
 import { buildAgentName } from "./agent-names.js";
-import { deleteLocalAgent, finalizeAgentName } from "./agents.js";
+import {
+  deleteLocalAgent,
+  finalizeAgentName,
+  sendAgentMessage,
+} from "./agents.js";
 import { nameFromPrompt } from "./agent-names.js";
 import { loadAgentHistory } from "./agent-history.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
@@ -361,7 +365,10 @@ export function createRouter(sessions) {
         );
 
         const abortController = new AbortController();
-        const run = await record.agent.send(agentPrompt);
+        const run = await sendAgentMessage(record.agent, agentPrompt, undefined, {
+          agentId: record.agentId,
+          cwd: record.cwd,
+        });
         sessions.setActiveRun(id, run, abortController);
 
         const outcome = await streamRun(res, run, {
@@ -400,11 +407,15 @@ export function createRouter(sessions) {
       } catch (err) {
         sessions.clearActiveRun(id, "error");
         if (!res.writableEnded) {
+          const raw = err.message ?? "Run failed";
+          const busy = /already has (?:an )?active run/i.test(raw);
           sessions.publishEvent(
             id,
             createSseEvent("error", id, {
-              message: err.message ?? "Run failed",
-              code: "RUN_FAILED",
+              message: busy
+                ? "Still working on the previous message — tap Stop, or wait for it to finish."
+                : raw,
+              code: busy ? "AGENT_BUSY" : "RUN_FAILED",
             }),
             res,
           );

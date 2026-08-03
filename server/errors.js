@@ -1,6 +1,8 @@
 export class SessionBusyError extends Error {
   constructor(sessionId) {
-    super(`Session already has an active run: ${sessionId}`);
+    super(
+      "Still working on the previous message — wait for it to finish, or stop the run.",
+    );
     this.name = "SessionBusyError";
     this.status = 409;
     this.code = "SESSION_BUSY";

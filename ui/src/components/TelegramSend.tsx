@@ -46,8 +46,10 @@ export function TelegramSend() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex min-h-11 items-center gap-1.5 rounded-md bg-[#229ED9] px-3 py-2 text-sm font-medium text-white active:bg-[#1a8bc4]"
+        className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-full bg-[#229ED9] text-sm font-medium text-white active:bg-[#1a8bc4] sm:min-w-0 sm:rounded-md sm:px-3 sm:py-2"
+        data-component="TelegramSend"
         data-testid="telegram-open-button"
+        aria-label="Telegram"
         aria-haspopup="dialog"
       >
         <TelegramIcon className="h-4 w-4" />
@@ -62,11 +64,15 @@ export function TelegramSend() {
         onClick={(e) => {
           if (e.target === dialogRef.current) closeDialog();
         }}
+        data-component="TelegramDialog"
         data-testid="telegram-dialog"
+        data-state={open ? "open" : "closed"}
       >
         <div
           className="w-full max-w-md rounded-lg border border-zinc-700 bg-zinc-900 p-4 shadow-xl"
           onClick={(e) => e.stopPropagation()}
+          data-section="telegram-dialog-panel"
+          data-testid="telegram-dialog__panel"
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>

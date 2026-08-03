@@ -39,6 +39,8 @@ export interface Session {
   cwd: string;
   model: string;
   name?: string;
+  telegramThreadId?: number | null;
+  telegramTopicUrl?: string | null;
   runStatus: string;
   runActive: boolean;
   createdAt: number;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getHealth } from "../lib/api";
 import { TelegramForm } from "../components/TelegramForm";
+import { TraceabilityInspector } from "../components/dev/TraceabilityInspector";
 
 function TelegramIcon({ className }: { className?: string }) {
   return (
@@ -27,9 +28,16 @@ export function TelegramPage() {
   return (
     <div
       className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4 text-zinc-100"
+      data-component="TelegramPage"
       data-testid="telegram-page"
+      data-page="ui/telegram"
     >
-      <main className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-xl">
+      <TraceabilityInspector />
+      <main
+        className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-xl"
+        data-section="telegram-card"
+        data-testid="telegram-page__card"
+      >
         <div className="mb-4 flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#229ED9]/20 text-[#229ED9]">
             <TelegramIcon className="h-5 w-5" />

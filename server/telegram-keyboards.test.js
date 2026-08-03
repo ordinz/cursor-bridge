@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   mainControlKeyboard,
   modelPickerKeyboard,
+  openUiKeyboard,
   parseCallbackData,
   postRunKeyboard,
   settingsKeyboard,
@@ -44,7 +45,9 @@ test("keyboards stay within Telegram callback_data limit", () => {
   for (const kb of [main, settings, models, post]) {
     for (const row of kb.inline_keyboard) {
       for (const button of row) {
-        assert.ok(button.callback_data.length <= 64, button.callback_data);
+        if (button.callback_data) {
+          assert.ok(button.callback_data.length <= 64, button.callback_data);
+        }
         assert.ok(button.text.length > 0);
       }
     }
@@ -53,6 +56,36 @@ test("keyboards stay within Telegram callback_data limit", () => {
   assert.match(main.inline_keyboard[0][0].text, /Phone ON/);
   assert.match(settings.inline_keyboard[0][1].text, /● plan/);
   assert.match(settings.inline_keyboard[2][0].text, /☑ Dev logs/);
+});
+
+test("postRunKeyboard adds Open in UI url button when agent known", () => {
+  const prev = process.env.BRIDGE_UI_ORIGIN;
+  process.env.BRIDGE_UI_ORIGIN = "https://ordins-cursor-bridge.kairose.com";
+  const kb = postRunKeyboard({
+    busy: false,
+    project: "app",
+    agentId: "agent-1",
+  });
+  const open = kb.inline_keyboard.flat().find((b) => b.text === "Open in UI");
+  assert.ok(open);
+  assert.equal(
+    open.url,
+    "https://ordins-cursor-bridge.kairose.com/?project=app&agent=agent-1",
+  );
+  assert.equal(open.callback_data, undefined);
+  if (prev === undefined) delete process.env.BRIDGE_UI_ORIGIN;
+  else process.env.BRIDGE_UI_ORIGIN = prev;
+});
+
+test("openUiKeyboard is url-only", () => {
+  const kb = openUiKeyboard({
+    project: "www",
+    agentId: "agent-2",
+    uiUrl: "https://example.com/?project=www&agent=agent-2",
+  });
+  assert.equal(kb.inline_keyboard.length, 1);
+  assert.equal(kb.inline_keyboard[0][0].text, "Open in UI");
+  assert.match(kb.inline_keyboard[0][0].url, /example\.com/);
 });
 
 test("telegram prefs update model/mode/logs", () => {

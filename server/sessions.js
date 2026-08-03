@@ -9,6 +9,8 @@ import {
   SessionNotFoundError,
 } from "./errors.js";
 import { SessionEventHub } from "./session-events.js";
+import { telegramTopicUrlForSession } from "./telegram-deeplinks.js";
+import { getBindingByAgentId } from "./telegram-topics.js";
 
 const IDLE_TIMEOUT_MS = Number(process.env.SESSION_IDLE_MS ?? 30 * 60 * 1000);
 const SNIPPET_MAX = 160;
@@ -168,6 +170,7 @@ export class SessionManager {
       local: { cwd },
     });
 
+    const binding = getBindingByAgentId(agent.agentId);
     const record = {
       sessionId,
       agent,
@@ -179,7 +182,7 @@ export class SessionManager {
       name: storedName ?? buildAgentName({ project, model }),
       namedFromPrompt,
       namingScheduled: false,
-      telegramThreadId: null,
+      telegramThreadId: binding?.threadId ?? null,
       activeRun: null,
       abortController: null,
       runStatus: "idle",
@@ -337,6 +340,11 @@ export class SessionManager {
 }
 
 function toPublicSession(record) {
+  const telegramThreadId =
+    record.telegramThreadId ??
+    getBindingByAgentId(record.agentId)?.threadId ??
+    null;
+  const withThread = { ...record, telegramThreadId };
   return {
     sessionId: record.sessionId,
     agentId: record.agentId,
@@ -345,7 +353,8 @@ function toPublicSession(record) {
     model: record.model,
     mode: record.mode === "plan" ? "plan" : "agent",
     name: record.name,
-    telegramThreadId: record.telegramThreadId ?? null,
+    telegramThreadId,
+    telegramTopicUrl: telegramTopicUrlForSession(withThread),
     runStatus: record.runStatus,
     runActive: Boolean(record.activeRun),
     createdAt: record.createdAt,

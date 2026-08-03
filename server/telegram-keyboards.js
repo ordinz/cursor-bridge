@@ -1,4 +1,5 @@
 import { modelLabel } from "./telegram-models.js";
+import { uiSessionUrl } from "./telegram-deeplinks.js";
 
 /**
  * Telegram has no native checkboxes — fake them with ○/● and ☐/☑ on
@@ -83,17 +84,43 @@ export function modelPickerKeyboard(models, selectedId) {
 }
 
 /**
- * Compact actions under a finished run.
- * @param {{ busy?: boolean }} [opts]
+ * Compact actions under a finished (or busy) run.
+ * Optionally includes a URL button to open the agent in the web UI.
+ * @param {{
+ *   busy?: boolean,
+ *   project?: string|null,
+ *   agentId?: string|null,
+ *   uiUrl?: string|null,
+ * }} [opts]
  */
-export function postRunKeyboard({ busy = false } = {}) {
-  return inlineKeyboard([
+export function postRunKeyboard({
+  busy = false,
+  project = null,
+  agentId = null,
+  uiUrl = null,
+} = {}) {
+  const rows = [
     [
       btn(busy ? "⏹ Stop" : "＋ New", busy ? "c:stop" : "c:new"),
       btn("⚙ Settings", "c:set"),
       btn("↻ Status", "c:status"),
     ],
-  ]);
+  ];
+  const openUrl = uiUrl || uiSessionUrl({ project, agentId });
+  if (openUrl) {
+    rows.push([{ text: "Open in UI", url: openUrl }]);
+  }
+  return inlineKeyboard(rows);
+}
+
+/**
+ * Keyboard with only the UI deep link (for /ui).
+ * @param {{ project: string, agentId: string, uiUrl?: string|null }} opts
+ */
+export function openUiKeyboard({ project, agentId, uiUrl = null }) {
+  const openUrl = uiUrl || uiSessionUrl({ project, agentId });
+  if (!openUrl) return inlineKeyboard([]);
+  return inlineKeyboard([[{ text: "Open in UI", url: openUrl }]]);
 }
 
 /**
