@@ -1,6 +1,8 @@
 export type {
   AgentInfo,
   ApiErrorBody,
+  ConversationReadEntry,
+  ConversationReadsResponse,
   DevLogsResponse,
   DevStatus,
   FeedItem,

@@ -1,6 +1,8 @@
 import type {
   AgentInfo,
   ApiErrorBody,
+  ConversationReadEntry,
+  ConversationReadsResponse,
   DevLogsResponse,
   DevStatus,
   FeedItem,
@@ -62,15 +64,32 @@ export async function getModels() {
   return json<{ models: Model[] }>("/api/models");
 }
 
-export async function getAgents(project: string) {
-  return json<{ agents: AgentInfo[] }>(
-    `/api/agents?project=${encodeURIComponent(project)}`,
-  );
+export async function getAgents(
+  project: string,
+  opts?: { includeArchived?: boolean },
+) {
+  const q = new URLSearchParams({ project });
+  if (opts?.includeArchived) q.set("includeArchived", "true");
+  return json<{ agents: AgentInfo[] }>(`/api/agents?${q}`);
 }
 
 export async function getAgentHistory(agentId: string, project: string) {
   return json<{ items: FeedItem[] }>(
     `/api/agents/${encodeURIComponent(agentId)}/history?project=${encodeURIComponent(project)}`,
+  );
+}
+
+export async function archiveAgent(agentId: string, project: string) {
+  return json<{ ok: boolean; closedSession: string | null }>(
+    `/api/agents/${encodeURIComponent(agentId)}/archive?project=${encodeURIComponent(project)}`,
+    { method: "POST" },
+  );
+}
+
+export async function unarchiveAgent(agentId: string, project: string) {
+  return json<{ ok: boolean }>(
+    `/api/agents/${encodeURIComponent(agentId)}/unarchive?project=${encodeURIComponent(project)}`,
+    { method: "POST" },
   );
 }
 
@@ -83,6 +102,22 @@ export async function deleteAgent(agentId: string, project: string) {
 
 export async function getSessions() {
   return json<{ sessions: Session[] }>("/api/sessions");
+}
+
+export async function getConversationReads() {
+  return json<ConversationReadsResponse>("/api/conversation-reads");
+}
+
+export async function markConversationRead(project: string, agentId: string) {
+  return json<{
+    ok: boolean;
+    key: string;
+    entry: ConversationReadEntry;
+  }>("/api/conversation-reads/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project, agentId }),
+  });
 }
 
 export async function getSession(sessionId: string) {

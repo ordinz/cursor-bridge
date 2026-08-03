@@ -18,6 +18,7 @@ export interface HealthResponse {
     sessionCount: number;
   };
   telegram: {
+    enabled?: boolean;
     configured: boolean;
     webhookConfigured?: boolean;
     phoneMode?: boolean;
@@ -66,6 +67,16 @@ export type RunStatus =
   | "cancelled"
   | "finished";
 
+export interface ConversationReadEntry {
+  lastReadAt: number;
+  lastCompletedAt: number;
+  lastSortAt: number;
+}
+
+export interface ConversationReadsResponse {
+  reads: Record<string, ConversationReadEntry>;
+}
+
 export interface Session {
   sessionId: string;
   agentId: string;
@@ -81,6 +92,8 @@ export interface Session {
   runActive: boolean;
   createdAt: number;
   lastActivityAt: number;
+  /** Sort key for Recent — not updated by streaming chunks. */
+  listActivityAt?: number;
   lastPrompt: string | null;
   lastAssistantSnippet: string | null;
   namedFromPrompt?: boolean;
@@ -105,6 +118,7 @@ export interface AgentInfo {
   summary: string;
   lastModified: number;
   status?: "running" | "finished" | "error";
+  archived?: boolean;
   cwd?: string;
 }
 
@@ -146,6 +160,7 @@ export type SseEvent =
       type: "user";
       text: string;
       source?: string;
+      imageCount?: number;
     })
   | (SseEnvelope & {
       type: "tool_call";

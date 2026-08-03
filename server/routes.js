@@ -6,9 +6,11 @@ import {
   nameFromPrompt,
 } from "./agent-names.js";
 import {
+  archiveLocalAgent,
   deleteLocalAgent,
   finalizeAgentName,
   sendAgentMessage,
+  unarchiveLocalAgent,
 } from "./agents.js";
 import { loadAgentHistory } from "./agent-history.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
@@ -29,6 +31,7 @@ import { setupSse, startHeartbeat, streamRun } from "./stream.js";
 import { VERSION } from "./version.js";
 import {
   isTelegramConfigured,
+  isTelegramEnabled,
   isTelegramWebhookConfigured,
   sendTelegramMessage,
   TelegramNotConfiguredError,
@@ -45,12 +48,19 @@ import {
 } from "./dev-logs.js";
 import {
   InvalidRequestError,
+  buildDisplayPromptWithImages,
+  validateChatPayload,
   validateCombinedPrompt,
   validateProjectId,
   validatePrompt,
   validateSessionId,
   validateTelegramMessage,
 } from "./validate.js";
+import {
+  listConversationReads,
+  markConversationRead,
+  removeConversationRead,
+} from "./conversation-reads.js";
 
 export function createRouter(sessions) {
   const router = express.Router();
@@ -84,6 +94,7 @@ export function createRouter(sessions) {
           sessionCount: sessions.sessions.size,
         },
         telegram: {
+          enabled: isTelegramEnabled(),
           configured: isTelegramConfigured(),
           webhookConfigured: isTelegramWebhookConfigured(),
           phoneMode: getPhoneModeState().phoneMode,
@@ -170,6 +181,7 @@ export function createRouter(sessions) {
     try {
       const project = validateProjectId(req.query.project);
       const cwd = resolveProject(project);
+      const includeArchived = req.query.includeArchived === "true";
       const result = await Agent.list({
         runtime: "local",
         cwd,
@@ -178,6 +190,7 @@ export function createRouter(sessions) {
 
       const agents = (result.items || []).filter((a) => {
         if (!a || isBridgeNamingAgent(a)) return false;
+        if (!includeArchived && a.archived) return false;
         return true;
       });
 
@@ -200,12 +213,54 @@ export function createRouter(sessions) {
     }
   });
 
+  router.post("/agents/:agentId/archive", async (req, res, next) => {
+    try {
+      const project = validateProjectId(req.query.project);
+      const closed = await sessions.closeByAgentId(req.params.agentId);
+      await archiveLocalAgent(req.params.agentId, project);
+      removeConversationRead(project, req.params.agentId);
+      res.json({ ok: true, closedSession: closed });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/agents/:agentId/unarchive", async (req, res, next) => {
+    try {
+      const project = validateProjectId(req.query.project);
+      await unarchiveLocalAgent(req.params.agentId, project);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.delete("/agents/:agentId", async (req, res, next) => {
     try {
       const project = validateProjectId(req.query.project);
       const closed = await sessions.closeByAgentId(req.params.agentId);
       await deleteLocalAgent(req.params.agentId, project);
+      removeConversationRead(project, req.params.agentId);
       res.json({ ok: true, closedSession: closed });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/conversation-reads", (_req, res) => {
+    res.json({ reads: listConversationReads() });
+  });
+
+  router.post("/conversation-reads/read", (req, res, next) => {
+    try {
+      const project = validateProjectId(req.body?.project);
+      const agentId =
+        typeof req.body?.agentId === "string" ? req.body.agentId.trim() : "";
+      if (!agentId) {
+        throw new InvalidRequestError("agentId is required");
+      }
+      const entry = markConversationRead(project, agentId);
+      res.json({ ok: true, key: `${project}:${agentId}`, entry });
     } catch (err) {
       next(err);
     }
@@ -297,7 +352,10 @@ export function createRouter(sessions) {
 
     try {
       const id = validateSessionId(req.params.id);
-      const userPrompt = validatePrompt(req.body?.prompt);
+      const { text: userPrompt, images } = validateChatPayload(
+        req.body?.prompt,
+        req.body?.images,
+      );
 
       let record;
       if (allowOverlap) {
@@ -337,6 +395,15 @@ export function createRouter(sessions) {
 
         const source = req.body?.source === "manual" ? "manual" : "api";
         const publish = (event) => sessions.publishEvent(id, event, res);
+        const displayText = buildDisplayPromptWithImages(userPrompt, images);
+        const sdkImages = images.map(({ data, mimeType }) => ({
+          data,
+          mimeType,
+        }));
+        const sendMessage =
+          sdkImages.length > 0
+            ? { text: agentPrompt, images: sdkImages }
+            : agentPrompt;
 
         publish(
           createSseEvent("session", id, {
@@ -369,11 +436,15 @@ export function createRouter(sessions) {
         }
 
         publish(
-          createSseEvent("user", id, { text: userPrompt, source }),
+          createSseEvent("user", id, {
+            text: displayText,
+            source,
+            ...(sdkImages.length ? { imageCount: sdkImages.length } : {}),
+          }),
         );
 
         const abortController = new AbortController();
-        const run = await sendAgentMessage(record.agent, agentPrompt, undefined, {
+        const run = await sendAgentMessage(record.agent, sendMessage, undefined, {
           agentId: record.agentId,
           cwd: record.cwd,
         });

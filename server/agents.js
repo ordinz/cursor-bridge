@@ -191,25 +191,74 @@ export function isAgentBusyError(err) {
   return /already has (?:an )?active run/i.test(msg);
 }
 
+export function isAgentArchivedError(err) {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  return (
+    /on archived agent/i.test(msg) || /unarchive it first/i.test(msg)
+  );
+}
+
+export async function unarchiveAgentByCwd(agentId, cwd) {
+  const platform = await createAgentPlatform({ workspaceRef: cwd });
+  await platform.unarchiveAgent(agentId);
+}
+
 /**
- * agent.send with one retry after clearing stale Cursor runs.
- * Matches Telegram operator behavior so the UI doesn't surface ghost "busy" errors.
+ * Unarchive when the agent is currently archived. Returns true if unarchived.
+ */
+export async function ensureAgentUnarchived(agentId, cwd) {
+  const platform = await createAgentPlatform({ workspaceRef: cwd });
+  let info;
+  try {
+    info = await platform.getAgent(agentId);
+  } catch {
+    return false;
+  }
+  if (!info?.archived) return false;
+  await platform.unarchiveAgent(agentId);
+  return true;
+}
+
+/**
+ * agent.send with retries for recoverable Cursor store state:
+ * archived → unarchive; stale "busy" → cancel leftover runs.
  */
 export async function sendAgentMessage(agent, sendMessage, opts, meta = {}) {
+  const send = () =>
+    opts === undefined
+      ? agent.send(sendMessage)
+      : agent.send(sendMessage, opts);
+
   try {
-    return opts === undefined
-      ? await agent.send(sendMessage)
-      : await agent.send(sendMessage, opts);
+    return await send();
   } catch (err) {
-    if (!isAgentBusyError(err)) throw err;
     const { agentId, cwd } = meta;
     if (!agentId || !cwd) throw err;
+
+    if (isAgentArchivedError(err)) {
+      await unarchiveAgentByCwd(agentId, cwd);
+      return await send();
+    }
+
+    if (!isAgentBusyError(err)) throw err;
     const cleared = await cancelStaleAgentRuns(agentId, cwd);
     if (cleared <= 0) throw err;
-    return opts === undefined
-      ? await agent.send(sendMessage)
-      : await agent.send(sendMessage, opts);
+    return await send();
   }
+}
+
+export async function archiveLocalAgent(agentId, project) {
+  const cwd = resolveProject(project);
+  await cancelStaleAgentRuns(agentId, cwd);
+
+  const platform = await createAgentPlatform({ workspaceRef: cwd });
+  await platform.archiveAgent(agentId);
+}
+
+export async function unarchiveLocalAgent(agentId, project) {
+  const cwd = resolveProject(project);
+  const platform = await createAgentPlatform({ workspaceRef: cwd });
+  await platform.unarchiveAgent(agentId);
 }
 
 export async function deleteLocalAgent(agentId, project) {

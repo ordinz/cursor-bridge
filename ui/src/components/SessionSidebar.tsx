@@ -1,4 +1,4 @@
-import { Trash2Icon } from "lucide-react";
+import { ArchiveIcon, ArchiveRestoreIcon, Trash2Icon } from "lucide-react";
 import type { AgentInfo } from "../lib/types";
 import {
   AlertDialog,
@@ -18,10 +18,14 @@ interface SessionSidebarProps {
   project: string;
   agents: AgentInfo[];
   agentsLoading: boolean;
-  deletingId: string | null;
+  busyId: string | null;
   activeAgentId?: string | null;
+  showArchived?: boolean;
   className?: string;
+  onShowArchivedChange?: (show: boolean) => void;
   onResumeAgent: (agentId: string) => void;
+  onArchiveAgent: (agentId: string) => void;
+  onUnarchiveAgent: (agentId: string) => void;
   onDeleteAgent: (agentId: string) => void;
 }
 
@@ -34,13 +38,106 @@ function formatTime(ts: number) {
   });
 }
 
+function AgentArchiveButton({
+  agent,
+  busy,
+  onArchive,
+}: {
+  agent: AgentInfo;
+  busy: boolean;
+  onArchive: () => void;
+}) {
+  const label = agent.name?.trim() || agent.agentId.slice(0, 16);
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger
+        disabled={busy}
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mt-2 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50 lg:size-8 lg:opacity-0 lg:group-hover:opacity-100"
+            data-testid="agent-archive-button"
+            data-agent-id={agent.agentId}
+            aria-label={`Archive ${label}`}
+            title="Archive agent"
+          />
+        }
+      >
+        {busy ? (
+          <span className="text-sm">…</span>
+        ) : (
+          <ArchiveIcon className="size-4" />
+        )}
+      </AlertDialogTrigger>
+      <AlertDialogContent size="sm" data-testid="agent-archive-dialog">
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <ArchiveIcon />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Archive agent?</AlertDialogTitle>
+          <AlertDialogDescription>
+            <span className="font-medium text-foreground">“{label}”</span>{" "}
+            moves out of History and Recent. Toggle “Show archived” to find it
+            again, or reopen it to bring it back automatically.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel data-testid="agent-archive-cancel">
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            data-testid="agent-archive-confirm"
+            onClick={onArchive}
+          >
+            Archive
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function AgentUnarchiveButton({
+  agent,
+  busy,
+  onUnarchive,
+}: {
+  agent: AgentInfo;
+  busy: boolean;
+  onUnarchive: () => void;
+}) {
+  const label = agent.name?.trim() || agent.agentId.slice(0, 16);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      disabled={busy}
+      className="mt-2 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50 lg:size-8 lg:opacity-0 lg:group-hover:opacity-100"
+      data-testid="agent-unarchive-button"
+      data-agent-id={agent.agentId}
+      aria-label={`Unarchive ${label}`}
+      title="Unarchive agent"
+      onClick={onUnarchive}
+    >
+      {busy ? (
+        <span className="text-sm">…</span>
+      ) : (
+        <ArchiveRestoreIcon className="size-4" />
+      )}
+    </Button>
+  );
+}
+
 function AgentDeleteButton({
   agent,
-  deleting,
+  busy,
   onDelete,
 }: {
   agent: AgentInfo;
-  deleting: boolean;
+  busy: boolean;
   onDelete: () => void;
 }) {
   const label = agent.name?.trim() || agent.agentId.slice(0, 16);
@@ -48,7 +145,7 @@ function AgentDeleteButton({
   return (
     <AlertDialog>
       <AlertDialogTrigger
-        disabled={deleting}
+        disabled={busy}
         render={
           <Button
             variant="ghost"
@@ -61,7 +158,7 @@ function AgentDeleteButton({
           />
         }
       >
-        {deleting ? (
+        {busy ? (
           <span className="text-sm">…</span>
         ) : (
           <Trash2Icon className="size-4" />
@@ -100,10 +197,14 @@ export function SessionSidebar({
   project,
   agents,
   agentsLoading,
-  deletingId,
+  busyId,
   activeAgentId = null,
+  showArchived = false,
   className = "",
+  onShowArchivedChange,
   onResumeAgent,
+  onArchiveAgent,
+  onUnarchiveAgent,
   onDeleteAgent,
 }: SessionSidebarProps) {
   return (
@@ -114,12 +215,29 @@ export function SessionSidebar({
       data-section="history"
     >
       <div
-        className="hidden border-b border-zinc-800/80 px-4 py-3.5 lg:block"
+        className="border-b border-zinc-800/80 px-4 py-3.5"
         data-section="history-header"
         data-testid="session-sidebar__header"
       >
-        <div className="text-[15px] font-semibold tracking-tight text-zinc-100 lg:text-sm lg:font-medium lg:text-zinc-300">
-          History
+        <div className="flex items-baseline justify-between gap-3">
+          <div className="text-[15px] font-semibold tracking-tight text-zinc-100 lg:text-sm lg:font-medium lg:text-zinc-300">
+            History
+          </div>
+          {onShowArchivedChange && (
+            <button
+              type="button"
+              onClick={() => onShowArchivedChange(!showArchived)}
+              className={`shrink-0 text-[11px] font-medium transition-colors ${
+                showArchived
+                  ? "text-zinc-300 hover:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+              data-testid="history-show-archived"
+              aria-pressed={showArchived}
+            >
+              {showArchived ? "Hide archived" : "Show archived"}
+            </button>
+          )}
         </div>
         <div
           className="text-xs text-zinc-500"
@@ -147,17 +265,21 @@ export function SessionSidebar({
             className="px-4 py-3 text-xs text-zinc-500"
             data-testid="session-sidebar__empty"
           >
-            No prior agents.
+            {showArchived ? "No agents." : "No prior agents."}
           </p>
         )}
         <ul className="divide-y divide-zinc-800/60 lg:divide-y-0 lg:p-2">
           {agents.map((agent) => {
             const isActive = activeAgentId === agent.agentId;
             const shortId = agent.agentId.slice(0, 12);
+            const busy = busyId === agent.agentId;
+            const archived = Boolean(agent.archived);
             return (
               <li
                 key={agent.agentId}
-                className={`group flex items-start gap-1 ${
+                className={`group flex items-start gap-0.5 ${
+                  archived ? "opacity-60" : ""
+                } ${
                   isActive
                     ? "bg-zinc-800/70 lg:rounded-md lg:border-l-2 lg:border-l-zinc-200"
                     : "active:bg-zinc-900 lg:rounded-md lg:border-l-2 lg:border-l-transparent"
@@ -166,12 +288,13 @@ export function SessionSidebar({
                 data-testid="agent-history-item"
                 data-agent-id={agent.agentId}
                 data-active={isActive || undefined}
+                data-archived={archived || undefined}
                 data-state={isActive ? "active" : "idle"}
               >
                 <button
                   type="button"
                   onClick={() => onResumeAgent(agent.agentId)}
-                  disabled={deletingId === agent.agentId}
+                  disabled={busy}
                   aria-current={isActive ? "true" : undefined}
                   className="min-h-14 min-w-0 flex-1 px-4 py-3 text-left disabled:opacity-50 lg:min-h-11 lg:px-2 lg:py-2"
                   data-testid={`agent-history-resume-${shortId}`}
@@ -188,6 +311,11 @@ export function SessionSidebar({
                     >
                       {agent.name || agent.agentId.slice(0, 16)}
                     </span>
+                    {archived && (
+                      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                        Archived
+                      </span>
+                    )}
                   </div>
                   <div
                     className={`truncate text-xs ${isActive ? "text-zinc-400" : "text-zinc-500"}`}
@@ -200,9 +328,22 @@ export function SessionSidebar({
                     {formatTime(agent.lastModified)}
                   </div>
                 </button>
+                {archived ? (
+                  <AgentUnarchiveButton
+                    agent={agent}
+                    busy={busy}
+                    onUnarchive={() => onUnarchiveAgent(agent.agentId)}
+                  />
+                ) : (
+                  <AgentArchiveButton
+                    agent={agent}
+                    busy={busy}
+                    onArchive={() => onArchiveAgent(agent.agentId)}
+                  />
+                )}
                 <AgentDeleteButton
                   agent={agent}
-                  deleting={deletingId === agent.agentId}
+                  busy={busy}
                   onDelete={() => onDeleteAgent(agent.agentId)}
                 />
               </li>

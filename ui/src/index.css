@@ -57,6 +57,7 @@
 }
 
 html {
+  font-size: 16px;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
@@ -99,9 +100,9 @@ body {
   margin-bottom: 0;
 }
 
-@supports (-webkit-touch-callout: none) {
-  textarea,
-  select {
-    font-size: 16px;
-  }
+/* iOS Safari zooms focused form controls under 16px — keep them at base size. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+textarea,
+select {
+  font-size: 16px !important;
 }

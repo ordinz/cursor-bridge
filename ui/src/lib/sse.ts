@@ -3,6 +3,7 @@ import type { ApiErrorBody, SseEvent } from "./types";
 
 export async function* readSseStream(
   response: Response,
+  options: { onActivity?: () => void } = {},
 ): AsyncGenerator<SseEvent> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
@@ -13,6 +14,7 @@ export async function* readSseStream(
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    options.onActivity?.();
 
     buffer += decoder.decode(value, { stream: true });
     const parts = buffer.split("\n\n");
@@ -35,13 +37,32 @@ export async function* readSseStream(
 export async function postChat(
   sessionId: string,
   prompt: string,
-  options: { source?: "manual" | "api"; includeDevLogs?: boolean } = {},
+  options: {
+    source?: "manual" | "api";
+    includeDevLogs?: boolean;
+    allowOverlap?: boolean;
+    images?: Array<{ data: string; mimeType: string; name?: string }>;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Response> {
-  const { source = "api", includeDevLogs = false } = options;
+  const {
+    source = "api",
+    includeDevLogs = false,
+    allowOverlap = false,
+    images,
+    signal,
+  } = options;
   const res = await fetch(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, source, includeDevLogs }),
+    body: JSON.stringify({
+      prompt,
+      source,
+      includeDevLogs,
+      ...(allowOverlap ? { allowOverlap: true } : {}),
+      ...(images?.length ? { images } : {}),
+    }),
+    signal,
   });
 
   if (!res.ok) {

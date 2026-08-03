@@ -7,6 +7,22 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
+    <script>
+      (function () {
+        var ua = navigator.userAgent;
+        var iOS =
+          /iPad|iPhone|iPod/.test(ua) ||
+          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+        if (!iOS) return;
+        var vp = document.querySelector('meta[name="viewport"]');
+        if (vp) {
+          vp.setAttribute(
+            "content",
+            "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
+          );
+        }
+      })();
+    </script>
     <meta name="theme-color" content="#09090b" />
     <meta name="description" content="Send a Telegram message via cursor-bridge." />
     <title>Telegram — cursor-bridge</title>

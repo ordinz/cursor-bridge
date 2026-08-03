@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Agent } from "@cursor/sdk";
 import { resolveProject, ProjectError } from "./projects.js";
 import { buildAgentName } from "./agent-names.js";
-import { getLocalAgentMeta } from "./agents.js";
+import { ensureAgentUnarchived, getLocalAgentMeta } from "./agents.js";
 import {
   NoActiveRunError,
   SessionBusyError,
@@ -11,6 +11,10 @@ import {
 import { SessionEventHub } from "./session-events.js";
 import { telegramTopicUrlForSession } from "./telegram-deeplinks.js";
 import { getBindingByAgentId } from "./telegram-topics.js";
+import {
+  bumpConversationSort,
+  markConversationCompleted,
+} from "./conversation-reads.js";
 
 const IDLE_TIMEOUT_MS = Number(process.env.SESSION_IDLE_MS ?? 30 * 60 * 1000);
 const SNIPPET_MAX = 160;
@@ -136,11 +140,14 @@ export class SessionManager {
       runStatus: "idle",
       createdAt: now,
       lastActivityAt: now,
+      /** Stable list ordering — not bumped by streaming assistant chunks. */
+      listActivityAt: now,
       lastPrompt: null,
       lastAssistantSnippet: null,
     };
 
     this.sessions.set(sessionId, record);
+    bumpConversationSort(project, agent.agentId, now);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
   }
@@ -162,6 +169,13 @@ export class SessionManager {
     );
     const now = Date.now();
     const agentMode = mode === "plan" ? "plan" : "agent";
+
+    // Opening an archived chat means continue it — bring it back to the active list.
+    try {
+      await ensureAgentUnarchived(agentId, cwd);
+    } catch {
+      // sendAgentMessage still recovers if the store stays archived.
+    }
 
     const agent = await Agent.resume(agentId, {
       apiKey: process.env.CURSOR_API_KEY,
@@ -188,6 +202,8 @@ export class SessionManager {
       runStatus: "idle",
       createdAt: now,
       lastActivityAt: now,
+      // Opening/resuming must not reshuffle the Recent list.
+      listActivityAt: 0,
       lastPrompt: null,
       lastAssistantSnippet: null,
     };
@@ -240,8 +256,12 @@ export class SessionManager {
   notePrompt(sessionId, prompt) {
     const record = this.get(sessionId);
     if (!record) return;
+    const now = Date.now();
     record.lastPrompt = prompt;
-    record.lastActivityAt = Date.now();
+    record.lastAssistantSnippet = null;
+    record.lastActivityAt = now;
+    record.listActivityAt = now;
+    bumpConversationSort(record.project, record.agentId, now);
   }
 
   noteAssistantText(sessionId, text) {
@@ -252,25 +272,36 @@ export class SessionManager {
       combined.length > SNIPPET_MAX
         ? `${combined.slice(-SNIPPET_MAX)}`
         : combined;
+    // Keep idle timeout alive, but do not reshuffle Recent ordering.
     record.lastActivityAt = Date.now();
   }
 
   setActiveRun(sessionId, run, abortController = null) {
     const record = this.get(sessionId);
     if (!record) return;
+    const now = Date.now();
     record.activeRun = run;
     record.abortController = abortController;
     record.runStatus = "running";
-    record.lastActivityAt = Date.now();
+    record.lastActivityAt = now;
+    record.listActivityAt = now;
+    bumpConversationSort(record.project, record.agentId, now);
   }
 
   clearActiveRun(sessionId, status = "idle") {
     const record = this.get(sessionId);
     if (!record) return;
+    const now = Date.now();
     record.activeRun = null;
     record.abortController = null;
     record.runStatus = status;
-    record.lastActivityAt = Date.now();
+    record.lastActivityAt = now;
+    record.listActivityAt = now;
+    if (status === "idle" || status === "finished" || status === "error") {
+      markConversationCompleted(record.project, record.agentId, now);
+    } else {
+      bumpConversationSort(record.project, record.agentId, now);
+    }
   }
 
   touch(sessionId) {
@@ -359,6 +390,7 @@ function toPublicSession(record) {
     runActive: Boolean(record.activeRun),
     createdAt: record.createdAt,
     lastActivityAt: record.lastActivityAt,
+    listActivityAt: record.listActivityAt || 0,
     lastPrompt: record.lastPrompt,
     lastAssistantSnippet: record.lastAssistantSnippet,
   };

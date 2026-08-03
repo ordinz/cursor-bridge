@@ -20,19 +20,31 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { MessageQueue } from "./MessageQueue";
+import {
+  useMessageQueue,
+  type QueuedMessage,
+} from "../hooks/useMessageQueue";
 
 const INCLUDE_LOGS_KEY = "cursor-bridge-include-dev-logs-v1";
+const DRAFT_STORAGE_PREFIX = "cursor-bridge-prompt-draft-v1:";
 const MAX_IMAGE_EDGE = 1280;
 const JPEG_QUALITY = 0.82;
+
+export type PromptSendOptions = {
+  includeDevLogs: boolean;
+  images?: Array<{ data: string; mimeType: string; name?: string }>;
+  /** Inject into a busy agent without waiting for the current run. */
+  allowOverlap?: boolean;
+};
 
 interface PromptInputProps {
   disabled: boolean;
   running: boolean;
   devStatus: DevStatus | null;
-  onSend: (
-    prompt: string,
-    options: { includeDevLogs: boolean },
-  ) => Promise<void>;
+  /** Scopes the persisted composer draft (e.g. project:agent). */
+  draftKey: string;
+  onSend: (prompt: string, options: PromptSendOptions) => Promise<void>;
 }
 
 type ImageAttachment = {
@@ -42,6 +54,105 @@ type ImageAttachment = {
   dataUrl: string;
   bytes: number;
 };
+
+type StoredDraft = {
+  prompt: string;
+  images: Array<{
+    id: string;
+    name: string;
+    dataUrl: string;
+    bytes: number;
+  }>;
+};
+
+function draftStorageKey(draftKey: string) {
+  return `${DRAFT_STORAGE_PREFIX}${draftKey}`;
+}
+
+function newDraftKeyFor(draftKey: string): string | null {
+  const sep = draftKey.indexOf(":");
+  if (sep < 0) return null;
+  const project = draftKey.slice(0, sep);
+  const agent = draftKey.slice(sep + 1);
+  if (!project || agent === "new") return null;
+  return `${project}:new`;
+}
+
+function loadDraft(draftKey: string): StoredDraft | null {
+  try {
+    const raw = localStorage.getItem(draftStorageKey(draftKey));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredDraft;
+    if (typeof parsed?.prompt !== "string") return null;
+    const images = Array.isArray(parsed.images)
+      ? parsed.images.filter(
+          (img): img is StoredDraft["images"][number] =>
+            Boolean(img) &&
+            typeof img.id === "string" &&
+            typeof img.name === "string" &&
+            typeof img.dataUrl === "string" &&
+            typeof img.bytes === "number",
+        )
+      : [];
+    return { prompt: parsed.prompt, images };
+  } catch {
+    return null;
+  }
+}
+
+function isEmptyDraft(draft: StoredDraft | null): boolean {
+  return !draft || (!draft.prompt && draft.images.length === 0);
+}
+
+/** Load draft for key; if empty after new→agent transition, take over `:new`. */
+function loadDraftWithMigration(draftKey: string): StoredDraft | null {
+  const draft = loadDraft(draftKey);
+  if (!isEmptyDraft(draft)) return draft;
+
+  const fromNewKey = newDraftKeyFor(draftKey);
+  if (!fromNewKey) return draft;
+
+  const fromNew = loadDraft(fromNewKey);
+  if (isEmptyDraft(fromNew) || !fromNew) return draft;
+
+  saveDraft(draftKey, fromNew);
+  saveDraft(fromNewKey, { prompt: "", images: [] });
+  return fromNew;
+}
+
+function saveDraft(draftKey: string, draft: StoredDraft) {
+  const key = draftStorageKey(draftKey);
+  if (!draft.prompt && draft.images.length === 0) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  const write = (payload: StoredDraft) => {
+    localStorage.setItem(key, JSON.stringify(payload));
+  };
+
+  try {
+    write(draft);
+  } catch {
+    try {
+      write({ prompt: draft.prompt, images: [] });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function draftToAttachments(draft: StoredDraft | null): ImageAttachment[] {
+  if (!draft?.images.length) return [];
+  return draft.images.map((img) => ({
+    ...img,
+    previewUrl: img.dataUrl,
+  }));
+}
 
 function logsActive(status: DevStatus | null): boolean {
   return Boolean(
@@ -88,6 +199,27 @@ function SendIcon({ className }: { className?: string }) {
       aria-hidden
     >
       <path d="M3.4 20.6 21 12 3.4 3.4l.1 6.8L15 12 3.5 13.8z" />
+    </svg>
+  );
+}
+
+function QueueIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4 6h12" />
+      <path d="M4 12h12" />
+      <path d="M4 18h8" />
+      <path d="M18 14v6" />
+      <path d="M15 17h6" />
     </svg>
   );
 }
@@ -167,19 +299,42 @@ function XIcon({ className }: { className?: string }) {
   );
 }
 
-function buildPromptWithImages(text: string, images: ImageAttachment[]) {
-  if (!images.length) return text;
-  const blocks = images
-    .map((img) => `![${img.name}](${img.dataUrl})`)
-    .join("\n\n");
-  const body = text.trim();
-  return body ? `${body}\n\n${blocks}` : blocks;
+function imagesToChatPayload(images: ImageAttachment[]) {
+  return images.map((img) => {
+    const comma = img.dataUrl.indexOf(",");
+    const header = comma >= 0 ? img.dataUrl.slice(0, comma) : "";
+    const data =
+      comma >= 0 ? img.dataUrl.slice(comma + 1) : img.dataUrl;
+    const mimeType =
+      header.match(/^data:([^;,]+)/i)?.[1] || "image/jpeg";
+    return { data, mimeType, name: img.name };
+  });
+}
+
+function queuedImagesToAttachments(images: QueuedMessage["images"]): ImageAttachment[] {
+  return images.map((img) => ({
+    ...img,
+    previewUrl: img.dataUrl,
+  }));
+}
+
+function clearComposerDraft(
+  draftKey: string,
+  setPrompt: (v: string) => void,
+  setImages: (v: ImageAttachment[]) => void,
+  setImageError: (v: string | null) => void,
+) {
+  setPrompt("");
+  setImages([]);
+  setImageError(null);
+  saveDraft(draftKey, { prompt: "", images: [] });
 }
 
 export function PromptInput({
   disabled,
   running,
   devStatus,
+  draftKey,
   onSend,
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState("");
@@ -187,6 +342,7 @@ export function PromptInput({
   const [attachOpen, setAttachOpen] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
   const [includeDevLogs, setIncludeDevLogs] = useState(() => {
     try {
       return localStorage.getItem(INCLUDE_LOGS_KEY) === "true";
@@ -196,7 +352,52 @@ export function PromptInput({
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendingRef = useRef(false);
+  const drainingRef = useRef(false);
+  const pauseDrainRef = useRef(false);
+  const wasRunningRef = useRef(running);
+  /** One automatic drain when opening a thread that already has a saved queue. */
+  const idleMountDrainRef = useRef(true);
   const titleId = useId();
+  const {
+    queue,
+    enqueue,
+    remove,
+    update,
+    take,
+    shift,
+    unshift,
+  } = useMessageQueue(draftKey);
+
+  useEffect(() => {
+    // Don't clobber an in-flight composer clear/send when the draft key
+    // migrates from `:new` → real agent id mid-request.
+    if (sendingRef.current) {
+      setHydratedKey(draftKey);
+      return;
+    }
+    const draft = loadDraftWithMigration(draftKey);
+    setPrompt(draft?.prompt ?? "");
+    setImages(draftToAttachments(draft));
+    setImageError(null);
+    setHydratedKey(draftKey);
+    setSending(false);
+    idleMountDrainRef.current = true;
+    pauseDrainRef.current = false;
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (hydratedKey !== draftKey) return;
+    saveDraft(draftKey, {
+      prompt,
+      images: images.map(({ id, name, dataUrl, bytes }) => ({
+        id,
+        name,
+        dataUrl,
+        bytes,
+      })),
+    });
+  }, [draftKey, hydratedKey, prompt, images]);
 
   useEffect(() => {
     try {
@@ -213,22 +414,148 @@ export function PromptInput({
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
   }, [prompt]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if ((!prompt.trim() && images.length === 0) || disabled || sending) return;
+  async function dispatchSend(
+    text: string,
+    options: PromptSendOptions,
+  ): Promise<boolean> {
+    sendingRef.current = true;
     setSending(true);
     try {
-      const body = buildPromptWithImages(
-        prompt.trim() || "See attached image(s).",
-        images,
-      );
-      await onSend(body, { includeDevLogs });
-      setPrompt("");
-      setImages([]);
-      setImageError(null);
+      await onSend(text, options);
+      return true;
+    } catch {
+      // Parent surfaces the error; caller may restore/re-queue.
+      return false;
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
+  }
+
+  async function sendQueuedMessage(
+    item: QueuedMessage,
+    options: { allowOverlap?: boolean; putBackOnFail?: boolean } = {},
+  ) {
+    const payloadImages = imagesToChatPayload(
+      queuedImagesToAttachments(item.images),
+    );
+    const ok = await dispatchSend(item.prompt, {
+      includeDevLogs: item.includeDevLogs,
+      images: payloadImages.length ? payloadImages : undefined,
+      allowOverlap: options.allowOverlap,
+    });
+    if (!ok && options.putBackOnFail !== false) {
+      unshift(item);
+    }
+    return ok;
+  }
+
+  // A new run clears a previous drain pause (failed auto-send).
+  useEffect(() => {
+    if (running) pauseDrainRef.current = false;
+  }, [running]);
+
+  // Drain the queue when a run finishes (not on every failed retry).
+  useEffect(() => {
+    const becameIdle = wasRunningRef.current && !running;
+    wasRunningRef.current = running;
+
+    if (running || disabled || sending || drainingRef.current) return;
+    if (queue.length === 0) return;
+    if (pauseDrainRef.current) return;
+
+    const mountDrain = idleMountDrainRef.current;
+    if (!becameIdle && !mountDrain) return;
+    idleMountDrainRef.current = false;
+
+    let cancelled = false;
+    drainingRef.current = true;
+    const next = shift();
+    if (!next) {
+      drainingRef.current = false;
+      return;
+    }
+
+    void (async () => {
+      // Yield so React Strict Mode cleanup can reclaim before we hit the network.
+      await Promise.resolve();
+      if (cancelled) {
+        unshift(next);
+        drainingRef.current = false;
+        return;
+      }
+      const ok = await sendQueuedMessage(next, { putBackOnFail: true });
+      if (!ok) pauseDrainRef.current = true;
+      drainingRef.current = false;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally keyed to run/idle + queue depth; send helpers close over latest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, disabled, sending, queue.length]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if ((!prompt.trim() && images.length === 0) || disabled) return;
+
+    const text = prompt.trim() || "See attached image(s).";
+    const queuedImages = images.map(({ id, name, dataUrl, bytes }) => ({
+      id,
+      name,
+      dataUrl,
+      bytes,
+    }));
+    const logs = includeDevLogs;
+
+    // Agent busy (or kickoff in flight): always queue — never block typing.
+    if (running || sendingRef.current) {
+      enqueue({
+        prompt: text,
+        includeDevLogs: logs,
+        images: queuedImages,
+      });
+      clearComposerDraft(draftKey, setPrompt, setImages, setImageError);
+      return;
+    }
+
+    const payloadImages = imagesToChatPayload(images);
+    // Clear first so the field never sits locked with the sent text.
+    clearComposerDraft(draftKey, setPrompt, setImages, setImageError);
+
+    const ok = await dispatchSend(text, {
+      includeDevLogs: logs,
+      images: payloadImages.length ? payloadImages : undefined,
+    });
+    if (!ok) {
+      // Restore only if the user hasn't already started a follow-up.
+      setPrompt((current) => current || text);
+      setImages((current) =>
+        current.length ? current : queuedImagesToAttachments(queuedImages),
+      );
+      setIncludeDevLogs(logs);
+    }
+  }
+
+  async function handleSendNow(id: string) {
+    if (disabled) return;
+    const item = take(id);
+    if (!item) return;
+    await sendQueuedMessage(item, {
+      allowOverlap: running || sendingRef.current,
+      putBackOnFail: true,
+    });
+  }
+
+  function handleEditInComposer(id: string) {
+    const item = take(id);
+    if (!item) return;
+    setPrompt(item.prompt);
+    setImages(queuedImagesToAttachments(item.images));
+    setIncludeDevLogs(item.includeDevLogs);
+    setImageError(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
   async function handleImageFiles(files: readonly File[]) {
@@ -266,9 +593,10 @@ export function PromptInput({
     }
   }
 
-  const inputDisabled = disabled || sending;
+  const inputDisabled = disabled;
+  const queueMode = running || sending;
   const canSend =
-    !inputDisabled && (Boolean(prompt.trim()) || images.length > 0);
+    !disabled && (Boolean(prompt.trim()) || images.length > 0);
   const capturing = logsActive(devStatus);
   const hasAttachments = includeDevLogs || images.length > 0;
 
@@ -297,13 +625,23 @@ export function PromptInput({
   return (
     <form
       onSubmit={handleSubmit}
-      className="shrink-0 border-t border-zinc-800/80 bg-zinc-950/95 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-3"
+      className="shrink-0 px-3 pb-2 pt-1 sm:px-4 sm:pb-2.5"
       data-component="PromptInput"
       data-testid="prompt-input"
       data-section="composer"
       aria-label="Message composer"
       data-state={running ? "running" : inputDisabled ? "disabled" : "idle"}
     >
+      <MessageQueue
+        items={queue}
+        running={queueMode}
+        busy={disabled}
+        onEdit={handleEditInComposer}
+        onDelete={remove}
+        onSendNow={(id) => void handleSendNow(id)}
+        onUpdate={(id, nextPrompt) => update(id, { prompt: nextPrompt })}
+      />
+
       {hasAttachments && (
         <AttachmentGroup
           className="mb-2 gap-2"
@@ -376,13 +714,13 @@ export function PromptInput({
         </p>
       )}
 
-      <div className="flex items-end gap-2">
+      <div className="flex items-end gap-1.5">
         <Popover open={attachOpen} onOpenChange={setAttachOpen}>
           <PopoverTrigger
             type="button"
             disabled={inputDisabled}
             className={cn(
-              "mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors",
+              "mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
               hasAttachments
                 ? "bg-zinc-800 text-zinc-100"
                 : "text-zinc-500 active:bg-zinc-800 active:text-zinc-300",
@@ -392,7 +730,7 @@ export function PromptInput({
             data-state={attachOpen ? "open" : hasAttachments ? "armed" : "idle"}
             aria-label="Attach"
           >
-            <PaperclipIcon className="h-[18px] w-[18px]" />
+            <PaperclipIcon className="h-4 w-4" />
           </PopoverTrigger>
           <PopoverContent
             align="start"
@@ -489,14 +827,23 @@ export function PromptInput({
           onChange={(e) => setPrompt(e.target.value)}
           disabled={inputDisabled}
           rows={1}
-          placeholder={running ? "Agent is working…" : "Message"}
-          className="max-h-32 min-h-11 flex-1 resize-none rounded-[22px] border border-zinc-700/80 bg-zinc-900 px-4 py-2.5 text-base leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+          placeholder={
+            queueMode
+              ? queue.length
+                ? "Add another to the queue…"
+                : "Queue a follow-up…"
+              : "Message"
+          }
+          style={{ fontSize: 16 }}
+          className="max-h-32 min-h-10 flex-1 resize-none rounded-[20px] border border-zinc-700/80 bg-zinc-900 px-3.5 py-2 leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
           data-testid="prompt-input__field"
           onPaste={handlePaste}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
+              if (canSend) {
+                e.currentTarget.form?.requestSubmit();
+              }
             }
           }}
         />
@@ -504,11 +851,22 @@ export function PromptInput({
         <button
           type="submit"
           disabled={!canSend}
-          className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-500 text-white transition-colors active:bg-sky-400 disabled:bg-zinc-800 disabled:text-zinc-600"
+          className={cn(
+            "mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white transition-colors disabled:bg-zinc-800 disabled:text-zinc-600",
+            queueMode
+              ? "bg-amber-500 active:bg-amber-400"
+              : "bg-sky-500 active:bg-sky-400",
+          )}
           data-testid="prompt-input__send"
-          aria-label="Send"
+          data-mode={queueMode ? "queue" : "send"}
+          aria-label={queueMode ? "Add to queue" : "Send"}
+          title={queueMode ? "Add to queue" : "Send"}
         >
-          <SendIcon className="h-5 w-5" />
+          {queueMode ? (
+            <QueueIcon className="h-4 w-4" />
+          ) : (
+            <SendIcon className="h-4 w-4" />
+          )}
         </button>
       </div>
     </form>

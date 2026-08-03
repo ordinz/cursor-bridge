@@ -70,7 +70,8 @@ export function TelegramForm({
         rows={4}
         autoFocus={autoFocus}
         placeholder={configured ? "Type your message…" : "Telegram not configured"}
-        className="min-h-24 w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-[#229ED9] focus:outline-none disabled:opacity-50"
+        style={{ fontSize: 16 }}
+        className="min-h-24 w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 placeholder:text-zinc-600 focus:border-[#229ED9] focus:outline-none disabled:opacity-50"
         data-testid="telegram-send-input"
       />
 

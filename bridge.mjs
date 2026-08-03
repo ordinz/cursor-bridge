@@ -34,7 +34,8 @@ const sessions = new SessionManager();
 app.use(cors());
 app.use(requireRemoteApiKey);
 mountMcpProxy(app);
-app.use(express.json({ limit: "1mb" }));
+// Chat may include a few compressed JPEG attachments as base64.
+app.use(express.json({ limit: "8mb" }));
 
 app.post(
   "/cursor-bridge/telegram/webhook",

@@ -5,7 +5,7 @@ import { SessionManager } from "./sessions.js";
 export function createTestApp() {
   const sessions = new SessionManager();
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "8mb" }));
   app.use("/api", createRouter(sessions));
   return { app, sessions };
 }

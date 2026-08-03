@@ -28,6 +28,10 @@ const sessionSchema = {
     runActive: { type: "boolean" },
     createdAt: { type: "integer", description: "Unix ms" },
     lastActivityAt: { type: "integer", description: "Unix ms" },
+    listActivityAt: {
+      type: "integer",
+      description: "Stable Recent-list sort key (Unix ms)",
+    },
     lastPrompt: { type: "string", nullable: true },
     lastAssistantSnippet: { type: "string", nullable: true },
     namedFromPrompt: { type: "boolean" },
@@ -377,12 +381,41 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["prompt"],
                   properties: {
                     prompt: {
                       type: "string",
-                      minLength: 1,
                       maxLength: PROMPT_MAX_LENGTH,
+                      description:
+                        "User text. Required unless images are provided.",
+                    },
+                    images: {
+                      type: "array",
+                      maxItems: 4,
+                      description:
+                        "Optional image attachments sent to the agent as SDK images (not embedded in prompt text).",
+                      items: {
+                        type: "object",
+                        required: ["data", "mimeType"],
+                        properties: {
+                          data: {
+                            type: "string",
+                            description: "Base64-encoded image bytes",
+                          },
+                          mimeType: {
+                            type: "string",
+                            description: "e.g. image/jpeg",
+                          },
+                          name: {
+                            type: "string",
+                            description: "Optional display name for the feed",
+                          },
+                          dataUrl: {
+                            type: "string",
+                            description:
+                              "Alternative to data+mimeType: a data:image/...;base64,... URL",
+                          },
+                        },
+                      },
                     },
                     allowOverlap: {
                       type: "boolean",

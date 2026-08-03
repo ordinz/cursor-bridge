@@ -4,7 +4,7 @@ import {
   parseAsStringLiteral,
 } from "nuqs";
 
-export const MOBILE_PANELS = ["history", "feed", "instructions"] as const;
+export const MOBILE_PANELS = ["history", "recent", "feed"] as const;
 export type MobilePanel = (typeof MOBILE_PANELS)[number];
 
 /** Shared URL parsers for the agent console. */

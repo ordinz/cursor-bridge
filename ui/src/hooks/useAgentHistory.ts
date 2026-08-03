@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { deleteAgent as deleteAgentApi, getAgents } from "../lib/api";
+import {
+  archiveAgent as archiveAgentApi,
+  deleteAgent as deleteAgentApi,
+  getAgents,
+  unarchiveAgent as unarchiveAgentApi,
+} from "../lib/api";
 import type { AgentInfo } from "../lib/types";
 
-export function useAgentHistory(project: string | null) {
+export function useAgentHistory(
+  project: string | null,
+  options: { includeArchived?: boolean } = {},
+) {
+  const includeArchived = options.includeArchived ?? false;
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -16,36 +25,110 @@ export function useAgentHistory(project: string | null) {
     setLoading(true);
     setError(null);
     try {
-      const data = await getAgents(project);
-      setAgents(data.agents);
+      const data = await getAgents(project, { includeArchived });
+      setAgents(
+        includeArchived
+          ? data.agents
+          : data.agents.filter((a) => !a.archived),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load agents");
     } finally {
       setLoading(false);
     }
-  }, [project]);
+  }, [project, includeArchived]);
+
+  const removeLocal = useCallback((agentId: string) => {
+    setAgents((prev) => prev.filter((a) => a.agentId !== agentId));
+  }, []);
+
+  const archiveAgent = useCallback(
+    async (agentId: string) => {
+      if (!project) return;
+      setBusyId(agentId);
+      setError(null);
+      try {
+        await archiveAgentApi(agentId, project);
+        if (includeArchived) {
+          setAgents((prev) =>
+            prev.map((a) =>
+              a.agentId === agentId ? { ...a, archived: true } : a,
+            ),
+          );
+        } else {
+          removeLocal(agentId);
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to archive agent",
+        );
+        throw err;
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [project, removeLocal, includeArchived],
+  );
+
+  const unarchiveAgent = useCallback(
+    async (agentId: string) => {
+      if (!project) return;
+      setBusyId(agentId);
+      setError(null);
+      try {
+        await unarchiveAgentApi(agentId, project);
+        if (includeArchived) {
+          setAgents((prev) =>
+            prev.map((a) =>
+              a.agentId === agentId ? { ...a, archived: false } : a,
+            ),
+          );
+        } else {
+          removeLocal(agentId);
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to unarchive agent",
+        );
+        throw err;
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [project, removeLocal, includeArchived],
+  );
 
   const deleteAgent = useCallback(
     async (agentId: string) => {
       if (!project) return;
-      setDeletingId(agentId);
+      setBusyId(agentId);
       setError(null);
       try {
         await deleteAgentApi(agentId, project);
-        setAgents((prev) => prev.filter((a) => a.agentId !== agentId));
+        removeLocal(agentId);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete agent");
         throw err;
       } finally {
-        setDeletingId(null);
+        setBusyId(null);
       }
     },
-    [project],
+    [project, removeLocal],
   );
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  return { agents, loading, deletingId, error, refresh, deleteAgent };
+  return {
+    agents,
+    loading,
+    deletingId: busyId,
+    busyId,
+    error,
+    refresh,
+    archiveAgent,
+    unarchiveAgent,
+    deleteAgent,
+  };
 }

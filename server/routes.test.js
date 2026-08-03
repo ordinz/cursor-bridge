@@ -51,6 +51,41 @@ test("validatePrompt rejects empty and whitespace", () => {
   assert.throws(() => validatePrompt(null), /required/);
 });
 
+test("validateChatPayload accepts images without embedding in prompt text", async () => {
+  const { validateChatPayload, buildDisplayPromptWithImages, PROMPT_MAX_LENGTH } =
+    await import("./validate.js");
+
+  const tinyJpegBase64 =
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z";
+
+  const oversizedPrompt = "x".repeat(PROMPT_MAX_LENGTH + 1);
+  assert.throws(
+    () => validateChatPayload(oversizedPrompt, undefined),
+    /exceeds maximum length/,
+  );
+
+  // Image as separate field — prompt stays short even when image is large.
+  const largeImage = "A".repeat(150_000);
+  const { text, images } = validateChatPayload("look", [
+    { data: largeImage, mimeType: "image/jpeg", name: "shot.jpg" },
+  ]);
+  assert.equal(text, "look");
+  assert.equal(images.length, 1);
+  assert.equal(images[0].data.length, 150_000);
+  assert.ok(text.length < PROMPT_MAX_LENGTH);
+
+  const fromDataUrl = validateChatPayload(null, [
+    { dataUrl: `data:image/png;base64,${tinyJpegBase64}` },
+  ]);
+  assert.ok(fromDataUrl.text.length > 0);
+  assert.equal(fromDataUrl.images[0].mimeType, "image/png");
+
+  const display = buildDisplayPromptWithImages("hi", [
+    { data: tinyJpegBase64, mimeType: "image/jpeg", name: "a.jpg" },
+  ]);
+  assert.match(display, /^hi\n\n!\[a\.jpg\]\(data:image\/jpeg;base64,/);
+});
+
 test("validateProjectId rejects path traversal", () => {
   assert.throws(() => validateProjectId("../etc"), /unknown project/);
   assert.throws(() => validateProjectId("foo/bar"), /unknown project/);
@@ -338,6 +373,52 @@ test("watch stream receives chat events", async () => {
     assert.ok(chatEvents.some((e) => e.type === "assistant"));
     assert.ok(watchEvents.some((e) => e.type === "assistant"));
     assert.ok(watchEvents.some((e) => e.type === "user" && e.text === "hello"));
+  });
+});
+
+test("chat with images sends SDK image payload, not base64-in-prompt", async () => {
+  await withTestServer(async ({ sessions, base }) => {
+    const id = seedIdleSession(sessions);
+    const record = sessions.get(id);
+    let sent = null;
+    record.agent.send = async (message) => {
+      sent = message;
+      return {
+        supports: (op) => op === "cancel",
+        cancel: async () => {},
+        stream: async function* () {
+          yield {
+            type: "assistant",
+            message: { content: [{ type: "text", text: "saw it" }] },
+          };
+        },
+        wait: async () => ({ id: "run-img", status: "finished" }),
+      };
+    };
+
+    const imageData = "A".repeat(120_000);
+    const events = await readSseUntil(
+      await fetch(`${base}/sessions/${id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "what is this?",
+          images: [{ data: imageData, mimeType: "image/jpeg", name: "big.jpg" }],
+        }),
+      }),
+      (event) => event.type === "done" || event.type === "error",
+    );
+
+    assert.ok(sent && typeof sent === "object");
+    assert.equal(sent.text, "what is this?");
+    assert.equal(sent.images.length, 1);
+    assert.equal(sent.images[0].data.length, 120_000);
+    assert.equal(sent.images[0].mimeType, "image/jpeg");
+
+    const userEvent = events.find((e) => e.type === "user");
+    assert.equal(userEvent.imageCount, 1);
+    assert.match(userEvent.text, /!\[big\.jpg\]\(data:image\/jpeg;base64,/);
+    assert.ok(!events.some((e) => e.type === "error"));
   });
 });
 
