@@ -1,4 +1,5 @@
 import { Agent } from "@cursor/sdk";
+import { isBridgeNamingAgent } from "./agent-names.js";
 import { loadAgentHistory } from "./agent-history.js";
 import { ENABLED_PROJECT_IDS, resolveProject } from "./projects.js";
 import { createDraftStreamer } from "./telegram-draft.js";
@@ -346,7 +347,13 @@ async function listProjectCandidates(project) {
 
   const now = Date.now();
   return (listed.items || [])
-    .filter((a) => a?.agentId && !a.archived && isRecentEnough(a, now))
+    .filter(
+      (a) =>
+        a?.agentId &&
+        !a.archived &&
+        !isBridgeNamingAgent(a) &&
+        isRecentEnough(a, now),
+    )
     .sort(
       (a, b) =>
         Number(b.lastModified || b.createdAt || 0) -

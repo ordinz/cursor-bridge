@@ -1,6 +1,7 @@
 import { Agent, createAgentPlatform, SqliteLocalAgentStore } from "@cursor/sdk";
 import { resolveProject } from "./projects.js";
 import {
+  BRIDGE_NAMING_AGENT_NAME,
   buildNamingPrompt,
   nameFromPrompt,
   sanitizeGeneratedName,
@@ -64,12 +65,17 @@ export async function generateAgentNameWithLlm({
   const model = process.env.AGENT_NAMING_MODEL ?? "default";
   const metaPrompt = buildNamingPrompt({ prompt, assistantSnippet });
 
+  let agent;
   try {
-    const result = await Agent.prompt(metaPrompt, {
+    agent = await Agent.create({
       apiKey: process.env.CURSOR_API_KEY,
+      name: BRIDGE_NAMING_AGENT_NAME,
       model: { id: model },
       local: { cwd },
     });
+
+    const run = await agent.send(metaPrompt);
+    const result = await run.wait();
 
     if (result.status !== "finished") return null;
 
@@ -82,6 +88,19 @@ export async function generateAgentNameWithLlm({
     return sanitizeGeneratedName(raw);
   } catch {
     return null;
+  } finally {
+    if (agent?.agentId) {
+      try {
+        await Agent.delete(agent.agentId, { cwd });
+      } catch {
+        // Listing still filters naming agents if delete fails.
+      }
+    }
+    try {
+      agent?.close?.();
+    } catch {
+      /* ignore */
+    }
   }
 }
 

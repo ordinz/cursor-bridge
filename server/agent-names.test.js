@@ -1,13 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  BRIDGE_NAMING_AGENT_NAME,
   buildNamingPrompt,
+  isBridgeNamingAgent,
   nameFromPrompt,
   sanitizeGeneratedName,
 } from "./agent-names.js";
 
 test("nameFromPrompt uses first non-empty line", () => {
   assert.equal(nameFromPrompt("\n\nFix login bug\nmore text"), "Fix login bug");
+});
+
+test("isBridgeNamingAgent matches naming helpers and legacy New Agent", () => {
+  assert.equal(isBridgeNamingAgent({ name: BRIDGE_NAMING_AGENT_NAME }), true);
+  assert.equal(isBridgeNamingAgent({ name: "New Agent" }), true);
+  assert.equal(isBridgeNamingAgent({ name: "  New Agent  " }), true);
+  assert.equal(isBridgeNamingAgent({ name: "Fix login bug" }), false);
+  assert.equal(isBridgeNamingAgent({ name: "" }), false);
+  assert.equal(isBridgeNamingAgent({}), false);
 });
 
 test("nameFromPrompt truncates long lines", () => {

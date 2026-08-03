@@ -1,5 +1,22 @@
 export const TITLE_MAX = 72;
 
+/** Distinctive name for one-shot agents that only generate conversation titles. */
+export const BRIDGE_NAMING_AGENT_NAME = "cursor-bridge · naming";
+
+/** Pre-marker default from `Agent.prompt()` naming helpers. */
+const LEGACY_NAMING_AGENT_NAME = "New Agent";
+
+/**
+ * Hide ephemeral title-generation agents from bridge UI / Telegram / MCP lists.
+ * @param {{ name?: string | null }} agent
+ */
+export function isBridgeNamingAgent(agent) {
+  const name = typeof agent?.name === "string" ? agent.name.trim() : "";
+  return (
+    name === BRIDGE_NAMING_AGENT_NAME || name === LEGACY_NAMING_AGENT_NAME
+  );
+}
+
 export function modelLabel(modelId) {
   if (!modelId || modelId === "default") return "Auto";
   return modelId;

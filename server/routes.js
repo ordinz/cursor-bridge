@@ -1,12 +1,15 @@
 import express from "express";
 import { Agent, Cursor } from "@cursor/sdk";
-import { buildAgentName } from "./agent-names.js";
+import {
+  buildAgentName,
+  isBridgeNamingAgent,
+  nameFromPrompt,
+} from "./agent-names.js";
 import {
   deleteLocalAgent,
   finalizeAgentName,
   sendAgentMessage,
 } from "./agents.js";
-import { nameFromPrompt } from "./agent-names.js";
 import { loadAgentHistory } from "./agent-history.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
 import {
@@ -173,8 +176,13 @@ export function createRouter(sessions) {
         limit: 50,
       });
 
+      const agents = (result.items || []).filter((a) => {
+        if (!a || isBridgeNamingAgent(a)) return false;
+        return true;
+      });
+
       res.json({
-        agents: result.items,
+        agents,
         nextCursor: result.nextCursor,
       });
     } catch (err) {
