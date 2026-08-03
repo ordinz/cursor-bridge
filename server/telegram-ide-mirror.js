@@ -240,6 +240,7 @@ async function maybeStreamActiveRun(sessions, detail, threadId) {
       }
     }
     await streamer.finalize();
+    await streamer.noteDone();
     await catchUpAgentHistory(agentId, detail.project);
   } catch (err) {
     console.warn(
