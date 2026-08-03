@@ -1,5 +1,12 @@
+import { useCallback, useMemo, useState } from "react";
 import { ArchiveIcon, ArchiveRestoreIcon, Trash2Icon } from "lucide-react";
 import type { RecentAgent } from "../hooks/useRecentConversations";
+import { useAgentListSearch } from "../hooks/useAgentListSearch";
+import {
+  agentActivityAt,
+  isWithinRecentWindow,
+  matchesAgentQuery,
+} from "../lib/agent-list";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,8 +28,11 @@ interface RecentConversationsProps {
   activeAgentId?: string | null;
   error?: string | null;
   showArchived?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
   className?: string;
   onShowArchivedChange?: (show: boolean) => void;
+  onLoadMore?: () => Promise<void>;
   onResumeAgent: (agentId: string, project: string) => void;
   onArchiveAgent: (agentId: string, project: string) => void;
   onUnarchiveAgent: (agentId: string, project: string) => void;
@@ -277,15 +287,59 @@ export function RecentConversations({
   activeAgentId = null,
   error = null,
   showArchived = false,
+  loadingMore = false,
+  hasMore = false,
   className = "",
   onShowArchivedChange,
+  onLoadMore,
   onResumeAgent,
   onArchiveAgent,
   onUnarchiveAgent,
   onDeleteAgent,
 }: RecentConversationsProps) {
-  const runningCount = agents.filter((a) => a.runActive).length;
-  const unreadCount = agents.filter((a) => a.unread && !a.runActive).length;
+  const [query, setQuery] = useState("");
+  const [showOlder, setShowOlder] = useState(false);
+
+  const match = useCallback(
+    (agent: RecentAgent, q: string) => matchesAgentQuery(agent, q),
+    [],
+  );
+  const loadMore = useCallback(async () => {
+    await onLoadMore?.();
+  }, [onLoadMore]);
+
+  const { filtered, searchingDeeper } = useAgentListSearch({
+    agents,
+    query,
+    match,
+    hasMore: Boolean(onLoadMore) && hasMore,
+    loadingMore,
+    loadMore,
+  });
+
+  const { visible, olderCount } = useMemo(() => {
+    if (showOlder || query.trim()) {
+      return { visible: filtered, olderCount: 0 };
+    }
+    const recent: RecentAgent[] = [];
+    let older = 0;
+    for (const agent of filtered) {
+      if (isWithinRecentWindow(agent)) recent.push(agent);
+      else older += 1;
+    }
+    return { visible: recent, olderCount: older };
+  }, [filtered, showOlder, query]);
+
+  const canShowMore =
+    !query.trim() && !showOlder && (olderCount > 0 || hasMore);
+
+  const handleShowMore = () => {
+    setShowOlder(true);
+    if (olderCount === 0 && hasMore) void loadMore();
+  };
+
+  const runningCount = visible.filter((a) => a.runActive).length;
+  const unreadCount = visible.filter((a) => a.unread && !a.runActive).length;
   const subtitle =
     runningCount > 0
       ? `${runningCount} running · tap to switch`
@@ -293,7 +347,9 @@ export function RecentConversations({
         ? `${unreadCount} unread · tap to open`
         : showArchived
           ? "Including archived · tap to switch"
-          : "Across all projects · tap to switch";
+          : showOlder || query.trim()
+            ? "Across all projects · tap to switch"
+            : "Last 3 days · tap to switch";
 
   return (
     <aside
@@ -352,6 +408,18 @@ export function RecentConversations({
         >
           {subtitle}
         </div>
+        <div className="mt-2.5">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter conversations…"
+            style={{ fontSize: 16 }}
+            className="h-9 w-full rounded-md border border-zinc-700/80 bg-zinc-900 px-2.5 text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-zinc-500"
+            data-testid="recent-search"
+            aria-label="Filter recent conversations"
+          />
+        </div>
       </div>
 
       <div
@@ -376,27 +444,31 @@ export function RecentConversations({
             Loading…
           </p>
         )}
-        {!agentsLoading && agents.length === 0 && (
+        {!agentsLoading && !searchingDeeper && visible.length === 0 && (
           <p
             className="px-4 py-3 text-xs text-zinc-500"
             data-testid="recent-conversations__empty"
           >
-            No recent conversations.
+            {query.trim()
+              ? "No conversations match."
+              : "No recent conversations."}
+          </p>
+        )}
+        {searchingDeeper && (
+          <p
+            className="px-4 py-3 text-xs text-zinc-500"
+            data-testid="recent-conversations__searching-deeper"
+          >
+            Searching older conversations…
           </p>
         )}
         <ul className="divide-y divide-zinc-800/60">
-          {agents.map((agent) => {
+          {visible.map((agent) => {
             const isActive = activeAgentId === agent.agentId;
             const shortId = agent.agentId.slice(0, 12);
             const preview = previewFor(agent);
             const label = statusLabel(agent);
-            const when = formatRelative(
-              Math.max(
-                agent.listActivityAt || 0,
-                agent.lastActivityAt || 0,
-                agent.lastModified || 0,
-              ),
-            );
+            const when = formatRelative(agentActivityAt(agent));
             const busy = busyId === agent.agentId;
             const archived = Boolean(agent.archived);
             const rowState = archived
@@ -526,6 +598,36 @@ export function RecentConversations({
             );
           })}
         </ul>
+        {canShowMore && (
+          <div className="border-t border-zinc-800/60 px-4 py-3">
+            <button
+              type="button"
+              onClick={handleShowMore}
+              disabled={loadingMore}
+              className="w-full rounded-md border border-zinc-700/80 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-50 disabled:opacity-50"
+              data-testid="recent-show-more"
+            >
+              {loadingMore
+                ? "Loading…"
+                : olderCount > 0
+                  ? `Show more (${olderCount} older)`
+                  : "Show more"}
+            </button>
+          </div>
+        )}
+        {showOlder && hasMore && !query.trim() && (
+          <div className="border-t border-zinc-800/60 px-4 py-3">
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="w-full rounded-md border border-zinc-700/80 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-50 disabled:opacity-50"
+              data-testid="recent-load-more"
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

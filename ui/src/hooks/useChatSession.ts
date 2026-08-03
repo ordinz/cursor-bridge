@@ -7,6 +7,11 @@ import {
   getSession,
   resumeSession,
 } from "../lib/api";
+import {
+  loadConversationCache,
+  saveConversationCache,
+} from "../lib/conversation-cache";
+import { connectSessionSocket } from "../lib/session-socket";
 import { postChat, readSseStream } from "../lib/sse";
 import type { FeedItem, Session, SseEvent } from "../lib/types";
 
@@ -15,6 +20,8 @@ export const SESSION_STORAGE_KEY = "cursor-bridge-active-session-v1";
 export const SESSION_SNAPSHOT_KEY = "cursor-bridge-session-snapshot-v1";
 
 const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** Debounce SSE → localStorage so streaming tokens don't thrash quota. */
+const CONVERSATION_CACHE_DEBOUNCE_MS = 400;
 
 type SessionSnapshot = {
   session: Session;
@@ -107,7 +114,19 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
   const next = [...items];
 
   switch (event.type) {
-    case "user":
+    case "user": {
+      // Optimistic send paints the user bubble before status events arrive.
+      // Skip matching user text even if status/tool rows landed after it.
+      let dup = false;
+      for (let i = next.length - 1; i >= 0; i--) {
+        const item = next[i];
+        if (item.kind === "user") {
+          dup = item.text === event.text;
+          break;
+        }
+        if (item.kind !== "status") break;
+      }
+      if (dup) break;
       next.push({
         id: nextId(),
         kind: "user",
@@ -120,6 +139,7 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
             : undefined,
       });
       break;
+    }
     case "assistant": {
       const last = next[next.length - 1];
       if (last?.kind === "assistant") {
@@ -172,7 +192,16 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
       }
       break;
     }
-    case "status":
+    case "status": {
+      const last = next[next.length - 1];
+      // SSE + WS can both deliver the same run-started status before seq lands.
+      if (
+        last?.kind === "status" &&
+        last.status === event.status &&
+        (last.message ?? "") === (event.message ?? "")
+      ) {
+        break;
+      }
       next.push({
         id: nextId(),
         kind: "status",
@@ -180,6 +209,7 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
         message: event.message,
       });
       break;
+    }
     case "error":
       next.push({ id: nextId(), kind: "error", message: event.message });
       break;
@@ -248,6 +278,17 @@ function applyWatchEvent(
   setFeed((items) => applyEvent(items, event));
 }
 
+/** Apply a stream event once (WebSocket + chat SSE may both deliver it). */
+function shouldAcceptSeq(
+  event: SseEvent,
+  eventSeqRef: { current: number },
+): boolean {
+  if (typeof event.seq !== "number") return true;
+  if (event.seq <= eventSeqRef.current) return false;
+  eventSeqRef.current = event.seq;
+  return true;
+}
+
 export function useChatSession() {
   const restoredRef = useRef<SessionSnapshot | null | undefined>(undefined);
   if (restoredRef.current === undefined) {
@@ -267,11 +308,48 @@ export function useChatSession() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const epochRef = useRef(0);
-  const feedRef = useRef<FeedItem[]>([]);
+  const feedRef = useRef<FeedItem[]>(restored?.feed ?? []);
+  const sessionRef = useRef<Session | null>(restored?.session ?? null);
+  const runStatusRef = useRef(restored?.runStatus ?? "idle");
+  const eventSeqRef = useRef(0);
+  /** True while this tab's sendPrompt is in flight (before/during server runActive). */
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     feedRef.current = feed;
   }, [feed]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    runStatusRef.current = runStatus;
+  }, [runStatus]);
+
+  const persistConversation = useCallback(
+    (
+      target: Pick<Session, "agentId" | "project" | "sessionId"> | null | undefined,
+      items: FeedItem[],
+      status: string,
+    ) => {
+      if (!target?.agentId || !target.project || items.length === 0) return;
+      saveConversationCache(target.project, target.agentId, {
+        feed: items,
+        sessionId: target.sessionId,
+        runStatus: status,
+      });
+    },
+    [],
+  );
+
+  const flushActiveConversation = useCallback(() => {
+    persistConversation(
+      sessionRef.current,
+      feedRef.current,
+      runStatusRef.current,
+    );
+  }, [persistConversation]);
 
   useEffect(() => {
     if (!session) return;
@@ -285,6 +363,24 @@ export function useChatSession() {
     );
     saveSnapshot(session, feed, runStatus);
   }, [session, feed, runStatus]);
+
+  // Push live feed (including watch/socket events) into multi-chat localStorage.
+  useEffect(() => {
+    if (!session?.agentId || !session.project || feed.length === 0) return;
+    const target = {
+      agentId: session.agentId,
+      project: session.project,
+      sessionId: session.sessionId,
+    };
+    const status = runStatus;
+    const items = feed;
+    const delay =
+      runStatus === "running" ? CONVERSATION_CACHE_DEBOUNCE_MS : 0;
+    const timer = window.setTimeout(() => {
+      persistConversation(target, items, status);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [session, feed, runStatus, persistConversation]);
 
   // After a cold restore from snapshot, revalidate quietly so Telegram/other
   // clients don't leave us looking at stale history — without blanking the UI.
@@ -307,54 +403,15 @@ export function useChatSession() {
         if (epoch !== epochRef.current) return;
         setSession(s);
         setRunStatus(statusFromSession(s));
-        if (history?.items) setFeed(history.items);
+        if (history?.items) {
+          setFeed(history.items);
+          persistConversation(s, history.items, statusFromSession(s));
+        }
       } catch {
         // Keep snapshot UI; user can still prompt or start a new session.
       }
     })();
-  }, [restored]);
-
-  useEffect(() => {
-    if (!session?.sessionId) return;
-
-    const sessionId = session.sessionId;
-    const epoch = epochRef.current;
-    const controller = new AbortController();
-    const replay = feedRef.current.length === 0 ? "1" : "0";
-    let active = true;
-
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/events?replay=${replay}`,
-          { signal: controller.signal },
-        );
-        if (!res.ok) {
-          throw new Error(`Watch stream failed (${res.status})`);
-        }
-
-        for await (const event of readSseStream(res)) {
-          if (!active || epoch !== epochRef.current) break;
-          applyWatchEvent(
-            event,
-            setFeed,
-            setSession,
-            setRunStatus,
-            setError,
-          );
-        }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          console.error("Session watch disconnected:", err);
-        }
-      }
-    })();
-
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [session?.sessionId]);
+  }, [restored, persistConversation]);
 
   const syncSession = useCallback((id: string) => {
     const epoch = epochRef.current;
@@ -362,10 +419,50 @@ export function useChatSession() {
       .then((s) => {
         if (epoch !== epochRef.current) return;
         setSession((prev) => (prev?.sessionId === id ? s : prev));
-        setRunStatus(statusFromSession(s));
+        setRunStatus(() => {
+          const next = statusFromSession(s);
+          // Don't let a poll race clear "running" while our POST is still open.
+          if (sendingRef.current && next === "idle") return "running";
+          return next;
+        });
       })
       .catch(() => undefined);
   }, []);
+
+  const ingestEvent = useCallback((event: SseEvent) => {
+    if (!shouldAcceptSeq(event, eventSeqRef)) return;
+    applyWatchEvent(event, setFeed, setSession, setRunStatus, setError);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.sessionId) return;
+
+    const sessionId = session.sessionId;
+    const epoch = epochRef.current;
+
+    const { close, reconnect } = connectSessionSocket(sessionId, {
+      getReplay: () => eventSeqRef.current > 0 || feedRef.current.length === 0,
+      getAfterSeq: () => eventSeqRef.current,
+      onEvent: (event) => {
+        if (epoch !== epochRef.current) return;
+        ingestEvent(event);
+      },
+    });
+
+    const onWake = () => {
+      if (document.visibilityState !== "visible") return;
+      syncSession(sessionId);
+      reconnect();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("pageshow", onWake);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("pageshow", onWake);
+      close();
+    };
+  }, [session?.sessionId, syncSession, ingestEvent]);
 
   // Keep polling even while running so a dropped watch stream cannot leave
   // the composer locked forever.
@@ -378,29 +475,13 @@ export function useChatSession() {
     return () => window.clearInterval(interval);
   }, [session?.sessionId, runStatus, syncSession]);
 
-  // Mobile browsers can suspend/kill background network activity; resync
-  // immediately on return so status/composer state don't stay stale.
-  useEffect(() => {
-    if (!session?.sessionId) return;
-    const id = session.sessionId;
-    const onWake = () => {
-      if (document.visibilityState === "visible") syncSession(id);
-    };
-    document.addEventListener("visibilitychange", onWake);
-    window.addEventListener("pageshow", onWake);
-    window.addEventListener("focus", onWake);
-    return () => {
-      document.removeEventListener("visibilitychange", onWake);
-      window.removeEventListener("pageshow", onWake);
-      window.removeEventListener("focus", onWake);
-    };
-  }, [session?.sessionId, syncSession]);
-
   const startSession = useCallback(
     async (project: string, model: string) => {
       // Invalidate in-flight resume/watch so a URL auto-resume cannot
       // overwrite this freshly created session.
+      flushActiveConversation();
       epochRef.current += 1;
+      eventSeqRef.current = 0;
       abortRef.current?.abort();
       abortRef.current = null;
       const epoch = epochRef.current;
@@ -412,24 +493,66 @@ export function useChatSession() {
       setRunStatus(statusFromSession(s));
       return s;
     },
-    [],
+    [flushActiveConversation],
+  );
+
+  /** Paint cached feed immediately when leaving the current chat for another. */
+  const beginResume = useCallback(
+    (agentId: string, project: string) => {
+      flushActiveConversation();
+      epochRef.current += 1;
+      eventSeqRef.current = 0;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setSession(null);
+      setError(null);
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      clearSnapshot();
+
+      const cached = loadConversationCache(project, agentId);
+      if (cached?.feed.length) {
+        setFeed(cached.feed);
+        setRunStatus(cached.runStatus ?? "idle");
+        setHistoryLoading(false);
+      } else {
+        setFeed([]);
+        setRunStatus("idle");
+        setHistoryLoading(true);
+      }
+    },
+    [flushActiveConversation],
   );
 
   const resumeAgent = useCallback(
     async (agentId: string, project: string, model: string) => {
+      // beginResume already bumps when switching; URL auto-resume needs this.
+      epochRef.current += 1;
+      eventSeqRef.current = 0;
       const epoch = epochRef.current;
       setError(null);
-      // Don't flash the loading banner when we already painted a snapshot/feed.
-      setHistoryLoading(feedRef.current.length === 0);
+
+      const cached = loadConversationCache(project, agentId);
+      if (cached?.feed.length && feedRef.current.length === 0) {
+        setFeed(cached.feed);
+        setRunStatus(cached.runStatus ?? "idle");
+      }
+      const hasCachedFeed =
+        (cached?.feed.length ?? 0) > 0 || feedRef.current.length > 0;
+      // Don't flash the loading banner when we already painted cache/snapshot.
+      setHistoryLoading(!hasCachedFeed);
+
       try {
         const [s, history] = await Promise.all([
           resumeSession(agentId, project, model),
-          getAgentHistory(agentId, project).catch(() => ({
-            items: [] as FeedItem[],
-          })),
+          getAgentHistory(agentId, project).catch(() => null),
         ]);
         if (epoch !== epochRef.current) return null;
-        setFeed(history.items);
+        if (history?.items) {
+          setFeed(history.items);
+          persistConversation(s, history.items, statusFromSession(s));
+        } else if (cached?.feed.length) {
+          persistConversation(s, cached.feed, statusFromSession(s));
+        }
         setSession(s);
         setRunStatus(statusFromSession(s));
         return s;
@@ -439,11 +562,13 @@ export function useChatSession() {
         }
       }
     },
-    [],
+    [persistConversation],
   );
 
   const clearSession = useCallback(() => {
+    flushActiveConversation();
     epochRef.current += 1;
+    eventSeqRef.current = 0;
     abortRef.current?.abort();
     abortRef.current = null;
     setSession(null);
@@ -453,7 +578,7 @@ export function useChatSession() {
     setHistoryLoading(false);
     localStorage.removeItem(SESSION_STORAGE_KEY);
     clearSnapshot();
-  }, []);
+  }, [flushActiveConversation]);
 
   const sendPrompt = useCallback(
     async (
@@ -474,6 +599,34 @@ export function useChatSession() {
       const epoch = epochRef.current;
       setError(null);
       setRunStatus("running");
+      sendingRef.current = true;
+
+      const displayPrompt = (() => {
+        const images = options.images;
+        if (!images?.length) return prompt;
+        const blocks = images
+          .map((img, i) => {
+            const name = img.name || `image-${i + 1}`;
+            return `![${name}](data:${img.mimeType};base64,${img.data})`;
+          })
+          .join("\n\n");
+        const trimmed = prompt.trim();
+        return trimmed ? `${trimmed}\n\n${blocks}` : blocks;
+      })();
+      const userSource = source === "manual" ? "manual" : "api";
+      setFeed((items) => {
+        const last = items[items.length - 1];
+        if (last?.kind === "user" && last.text === displayPrompt) return items;
+        return [
+          ...items,
+          {
+            id: nextId(),
+            kind: "user",
+            text: displayPrompt,
+            source: userSource,
+          },
+        ];
+      });
 
       // Overlapping sends keep the existing chat SSE alive so the original
       // run can still finish; a normal send supersedes the prior reader.
@@ -497,7 +650,7 @@ export function useChatSession() {
 
       try {
         const res = await postChat(active.sessionId, prompt, {
-          source: source === "manual" ? "manual" : "api",
+          source: userSource,
           includeDevLogs: options.includeDevLogs,
           allowOverlap: options.allowOverlap,
           images: options.images,
@@ -505,40 +658,12 @@ export function useChatSession() {
         });
         armIdleTimer();
 
+        // Chat SSE remains a reliable feed path; seq dedupes against WebSocket.
         for await (const event of readSseStream(res, {
           onActivity: armIdleTimer,
         })) {
           if (epoch !== epochRef.current) return;
-          if (event.type === "session") {
-            setSession((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    name: event.name ?? prev.name,
-                    runStatus: event.runStatus ?? prev.runStatus,
-                    runActive: event.runActive ?? prev.runActive,
-                  }
-                : prev,
-            );
-          } else if (event.type === "done") {
-            const status =
-              event.status === "finished" ? "idle" : event.status;
-            setRunStatus(status);
-            setSession((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    runStatus: status,
-                    runActive: false,
-                    lastActivityAt:
-                      Date.parse(event.timestamp) || prev.lastActivityAt,
-                  }
-                : prev,
-            );
-          } else if (event.type === "error") {
-            setError(event.message);
-            setRunStatus("error");
-          }
+          ingestEvent(event);
         }
         if (epoch !== epochRef.current) return;
         setRunStatus((prev) => (prev === "running" ? "idle" : prev));
@@ -576,10 +701,11 @@ export function useChatSession() {
         }
         throw err instanceof Error ? err : new Error(message);
       } finally {
+        sendingRef.current = false;
         clearIdleTimer();
       }
     },
-    [session, syncSession],
+    [session, syncSession, ingestEvent],
   );
 
   const stopRun = useCallback(async () => {
@@ -599,6 +725,7 @@ export function useChatSession() {
     error,
     historyLoading,
     startSession,
+    beginResume,
     resumeAgent,
     sendPrompt,
     stopRun,

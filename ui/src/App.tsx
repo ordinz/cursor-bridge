@@ -50,8 +50,10 @@ export default function App() {
     agents,
     loading: agentsLoading,
     busyId: historyBusyId,
+    loadingMore: historyLoadingMore,
+    hasMore: historyHasMore,
+    loadMore: loadMoreHistory,
     refresh: refreshAgents,
-    archiveAgent: archiveHistoryAgent,
     unarchiveAgent: unarchiveHistoryAgent,
     deleteAgent: deleteHistoryAgent,
   } = useAgentHistory(project, { includeArchived: showArchived });
@@ -62,6 +64,9 @@ export default function App() {
     busyId: recentBusyId,
     error: recentError,
     runningCount: recentRunningCount,
+    loadingMore: recentLoadingMore,
+    hasMore: recentHasMore,
+    loadMore: loadMoreRecent,
     refresh: refreshRecent,
     markRead: markRecentRead,
     archiveAgent: archiveRecentAgent,
@@ -79,6 +84,7 @@ export default function App() {
     error,
     historyLoading,
     startSession,
+    beginResume,
     resumeAgent,
     sendPrompt,
     stopRun,
@@ -234,7 +240,7 @@ export default function App() {
         return;
       }
       suppressResumeRef.current = true;
-      clearSession();
+      beginResume(agentId, projectId);
       try {
         await setUrlState({
           project: projectId,
@@ -254,7 +260,7 @@ export default function App() {
     [
       session?.agentId,
       project,
-      clearSession,
+      beginResume,
       setUrlState,
       setMobilePanel,
       resumeAgent,
@@ -320,14 +326,15 @@ export default function App() {
   );
 
   const handleArchiveAgent = useCallback(
-    async (agentId: string, projectId: string = project) => {
+    async (
+      agentId: string,
+      projectId: string = project,
+      opts?: { goToRecent?: boolean },
+    ) => {
       try {
-        if (projectId === project) {
-          await archiveHistoryAgent(agentId);
-        } else {
-          await archiveRecentAgent(agentId, projectId);
-        }
-        void refreshRecent();
+        // Always update Recent local state (agents + live session overlay).
+        // History is project-scoped and refreshed when it matches.
+        await archiveRecentAgent(agentId, projectId);
         if (projectId === project) {
           void refreshAgents();
         }
@@ -340,20 +347,22 @@ export default function App() {
             suppressResumeRef.current = false;
           }
         }
+        if (opts?.goToRecent) {
+          setMobilePanel("recent");
+        }
       } catch (err) {
         console.error(err);
       }
     },
     [
-      archiveHistoryAgent,
       archiveRecentAgent,
-      refreshRecent,
       refreshAgents,
       project,
       session,
       urlAgent,
       clearSession,
       setUrlState,
+      setMobilePanel,
     ],
   );
 
@@ -524,7 +533,11 @@ export default function App() {
         onNewSession={handleNewSession}
         onArchiveSession={() => {
           if (!activeAgentId) return;
-          void handleArchiveAgent(activeAgentId, session?.project ?? project);
+          void handleArchiveAgent(
+            activeAgentId,
+            session?.project ?? project,
+            { goToRecent: true },
+          );
         }}
         onStop={() => void stopRun()}
       />
@@ -532,12 +545,17 @@ export default function App() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <SessionSidebar
           project={project}
+          projects={projects}
           agents={agents}
           agentsLoading={agentsLoading}
           busyId={historyBusyId}
           activeAgentId={activeAgentId}
           showArchived={showArchived}
+          loadingMore={historyLoadingMore}
+          hasMore={historyHasMore}
+          onProjectChange={setProject}
           onShowArchivedChange={setShowArchived}
+          onLoadMore={loadMoreHistory}
           onResumeAgent={(id) => void handleResumeAgent(id)}
           onArchiveAgent={(id) => void handleArchiveAgent(id)}
           onUnarchiveAgent={(id) => void handleUnarchiveAgent(id)}
@@ -556,7 +574,10 @@ export default function App() {
           activeAgentId={activeAgentId}
           error={recentError}
           showArchived={showArchived}
+          loadingMore={recentLoadingMore}
+          hasMore={recentHasMore}
           onShowArchivedChange={setShowArchived}
+          onLoadMore={loadMoreRecent}
           onResumeAgent={(id, projectId) =>
             void handleResumeAgent(id, projectId)
           }

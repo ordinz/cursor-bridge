@@ -12,6 +12,18 @@ import {
   AttachmentTitle,
 } from "@/components/ui/attachment";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Popover,
   PopoverContent,
   PopoverDescription,
@@ -342,6 +354,7 @@ export function PromptInput({
   const [attachOpen, setAttachOpen] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [showClear, setShowClear] = useState(false);
   const [hydratedKey, setHydratedKey] = useState<string | null>(null);
   const [includeDevLogs, setIncludeDevLogs] = useState(() => {
     try {
@@ -411,7 +424,15 @@ export function PromptInput({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+    const scrollHeight = el.scrollHeight;
+    el.style.height = `${Math.min(scrollHeight, 128)}px`;
+
+    const styles = getComputedStyle(el);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 22;
+    const paddingY =
+      (Number.parseFloat(styles.paddingTop) || 0) +
+      (Number.parseFloat(styles.paddingBottom) || 0);
+    setShowClear(scrollHeight > lineHeight * 2 + paddingY + 1);
   }, [prompt]);
 
   async function dispatchSend(
@@ -820,33 +841,81 @@ export function PromptInput({
         <label className="sr-only" htmlFor="prompt-input">
           Message
         </label>
-        <textarea
-          ref={textareaRef}
-          id="prompt-input"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          disabled={inputDisabled}
-          rows={1}
-          placeholder={
-            queueMode
-              ? queue.length
-                ? "Add another to the queue…"
-                : "Queue a follow-up…"
-              : "Message"
-          }
-          style={{ fontSize: 16 }}
-          className="max-h-32 min-h-10 flex-1 resize-none rounded-[20px] border border-zinc-700/80 bg-zinc-900 px-3.5 py-2 leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
-          data-testid="prompt-input__field"
-          onPaste={handlePaste}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              if (canSend) {
-                e.currentTarget.form?.requestSubmit();
-              }
+        <div className="relative min-w-0 flex-1">
+          <textarea
+            ref={textareaRef}
+            id="prompt-input"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            disabled={inputDisabled}
+            rows={1}
+            placeholder={
+              queueMode
+                ? queue.length
+                  ? "Add another to the queue…"
+                  : "Queue a follow-up…"
+                : "Message"
             }
-          }}
-        />
+            style={{ fontSize: 16 }}
+            className={cn(
+              "max-h-32 min-h-10 w-full resize-none rounded-[20px] border border-zinc-700/80 bg-zinc-900 px-3.5 py-2 leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50",
+              showClear && "pr-9",
+            )}
+            data-testid="prompt-input__field"
+            onPaste={handlePaste}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                if (canSend) {
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }
+            }}
+          />
+          {showClear && (
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <button
+                    type="button"
+                    className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                    data-testid="prompt-input__clear"
+                    aria-label="Clear message"
+                    title="Clear message"
+                  />
+                }
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </AlertDialogTrigger>
+              <AlertDialogContent size="sm" data-testid="prompt-clear-dialog">
+                <AlertDialogHeader>
+                  <AlertDialogMedia>
+                    <XIcon className="size-6" />
+                  </AlertDialogMedia>
+                  <AlertDialogTitle>Clear message?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes the text in the composer. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel data-testid="prompt-clear-cancel">
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    variant="destructive"
+                    data-testid="prompt-clear-confirm"
+                    onClick={() => {
+                      setPrompt("");
+                      requestAnimationFrame(() => textareaRef.current?.focus());
+                    }}
+                  >
+                    Clear
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
 
         <button
           type="submit"

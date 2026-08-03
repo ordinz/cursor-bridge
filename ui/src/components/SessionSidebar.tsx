@@ -1,5 +1,8 @@
+import { useCallback, useState } from "react";
 import { ArchiveIcon, ArchiveRestoreIcon, Trash2Icon } from "lucide-react";
-import type { AgentInfo } from "../lib/types";
+import type { AgentInfo, Project } from "../lib/types";
+import { matchesAgentQuery } from "../lib/agent-list";
+import { useAgentListSearch } from "../hooks/useAgentListSearch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,16 +16,22 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { ProjectSelect } from "./ProjectSelect";
 
 interface SessionSidebarProps {
   project: string;
+  projects: Project[];
   agents: AgentInfo[];
   agentsLoading: boolean;
   busyId: string | null;
   activeAgentId?: string | null;
   showArchived?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
   className?: string;
+  onProjectChange: (project: string) => void;
   onShowArchivedChange?: (show: boolean) => void;
+  onLoadMore?: () => Promise<void>;
   onResumeAgent: (agentId: string) => void;
   onArchiveAgent: (agentId: string) => void;
   onUnarchiveAgent: (agentId: string) => void;
@@ -195,18 +204,41 @@ function AgentDeleteButton({
 
 export function SessionSidebar({
   project,
+  projects,
   agents,
   agentsLoading,
   busyId,
   activeAgentId = null,
   showArchived = false,
+  loadingMore = false,
+  hasMore = false,
   className = "",
+  onProjectChange,
   onShowArchivedChange,
+  onLoadMore,
   onResumeAgent,
   onArchiveAgent,
   onUnarchiveAgent,
   onDeleteAgent,
 }: SessionSidebarProps) {
+  const [query, setQuery] = useState("");
+  const match = useCallback(
+    (agent: AgentInfo, q: string) => matchesAgentQuery(agent, q),
+    [],
+  );
+  const loadMore = useCallback(async () => {
+    await onLoadMore?.();
+  }, [onLoadMore]);
+
+  const { filtered, searchingDeeper } = useAgentListSearch({
+    agents,
+    query,
+    match,
+    hasMore: Boolean(onLoadMore) && hasMore,
+    loadingMore,
+    loadMore,
+  });
+
   return (
     <aside
       className={`shrink-0 flex-col border-zinc-800 bg-zinc-950 lg:border-r ${className}`}
@@ -240,10 +272,27 @@ export function SessionSidebar({
           )}
         </div>
         <div
-          className="text-xs text-zinc-500"
+          className="mt-1 min-w-0"
           data-testid="session-sidebar__project"
         >
-          {project}
+          <ProjectSelect
+            project={project}
+            projects={projects}
+            onProjectChange={onProjectChange}
+            side="bottom"
+          />
+        </div>
+        <div className="mt-2.5">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter history…"
+            style={{ fontSize: 16 }}
+            className="h-9 w-full rounded-md border border-zinc-700/80 bg-zinc-900 px-2.5 text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-zinc-500"
+            data-testid="history-search"
+            aria-label="Filter history"
+          />
         </div>
       </div>
 
@@ -252,7 +301,7 @@ export function SessionSidebar({
         data-section="history-list"
         data-testid="session-sidebar__list"
       >
-        {agentsLoading && (
+        {agentsLoading && agents.length === 0 && (
           <p
             className="px-4 py-3 text-xs text-zinc-500"
             data-testid="session-sidebar__loading"
@@ -260,16 +309,28 @@ export function SessionSidebar({
             Loading…
           </p>
         )}
-        {!agentsLoading && agents.length === 0 && (
+        {!agentsLoading && !searchingDeeper && filtered.length === 0 && (
           <p
             className="px-4 py-3 text-xs text-zinc-500"
             data-testid="session-sidebar__empty"
           >
-            {showArchived ? "No agents." : "No prior agents."}
+            {query.trim()
+              ? "No agents match."
+              : showArchived
+                ? "No agents."
+                : "No prior agents."}
+          </p>
+        )}
+        {searchingDeeper && (
+          <p
+            className="px-4 py-3 text-xs text-zinc-500"
+            data-testid="session-sidebar__searching-deeper"
+          >
+            Searching older agents…
           </p>
         )}
         <ul className="divide-y divide-zinc-800/60 lg:divide-y-0 lg:p-2">
-          {agents.map((agent) => {
+          {filtered.map((agent) => {
             const isActive = activeAgentId === agent.agentId;
             const shortId = agent.agentId.slice(0, 12);
             const busy = busyId === agent.agentId;
@@ -350,6 +411,19 @@ export function SessionSidebar({
             );
           })}
         </ul>
+        {!query.trim() && hasMore && (
+          <div className="border-t border-zinc-800/60 px-4 py-3 lg:border-t-0 lg:px-2 lg:pb-2">
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="w-full rounded-md border border-zinc-700/80 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-50 disabled:opacity-50 lg:py-2 lg:text-xs"
+              data-testid="history-load-more"
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

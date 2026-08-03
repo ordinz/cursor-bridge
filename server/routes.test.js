@@ -259,6 +259,7 @@ test("openapi.json describes core routes", async () => {
     assert.ok(spec.paths["/projects"]);
     assert.ok(spec.paths["/sessions/{id}"]);
     assert.ok(spec.paths["/sessions/{id}/events"]);
+    assert.ok(spec.paths["/sessions/{id}/ws"]);
     assert.ok(spec.paths["/sessions"]);
     assert.ok(spec.paths["/projects/{projectId}/dev-status"]);
     assert.ok(spec.paths["/projects/{projectId}/dev-logs"]);

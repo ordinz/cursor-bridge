@@ -65,7 +65,7 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
       title: "cursor-bridge Agent API",
       version: VERSION,
       description:
-        "Localhost HTTP + SSE API for external browser agents. See AGENT_API.md for client guidance.",
+        "Localhost HTTP + SSE/WebSocket API for external browser agents. See AGENT_API.md for client guidance.",
     },
     servers: [{ url: `${baseUrl}/api` }],
     paths: {
@@ -329,7 +329,7 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
       "/sessions/{id}/events": {
         get: {
           operationId: "watchSession",
-          summary: "Watch session events (SSE fan-out from chat runs)",
+          summary: "Watch session events (SSE fan-out; prefer WebSocket /ws)",
           parameters: [
             {
               name: "id",
@@ -344,6 +344,13 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
               schema: { type: "string", enum: ["0", "1"], default: "1" },
               description:
                 "When 1, replay buffered events from the current run on connect",
+            },
+            {
+              name: "after",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 0, default: 0 },
+              description: "Skip buffered events with seq <= after",
             },
           ],
           responses: {
@@ -360,6 +367,38 @@ export function buildOpenApiSpec(baseUrl = "http://127.0.0.1:4242") {
               description: "Session not found",
               content: { "application/json": { schema: errorSchema } },
             },
+          },
+        },
+      },
+      "/sessions/{id}/ws": {
+        get: {
+          operationId: "watchSessionWebSocket",
+          summary: "Watch session events over WebSocket",
+          description:
+            "HTTP Upgrade to WebSocket. JSON messages match SSE event objects and include seq. Query params: replay, after.",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+            {
+              name: "replay",
+              in: "query",
+              required: false,
+              schema: { type: "string", enum: ["0", "1"], default: "1" },
+            },
+            {
+              name: "after",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 0, default: 0 },
+            },
+          ],
+          responses: {
+            101: { description: "Switching Protocols" },
+            404: { description: "Session not found" },
           },
         },
       },

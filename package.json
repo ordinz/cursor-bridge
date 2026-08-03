@@ -27,6 +27,10 @@
     "@cursor/sdk": "^1.0.18",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

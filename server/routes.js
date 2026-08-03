@@ -182,10 +182,20 @@ export function createRouter(sessions) {
       const project = validateProjectId(req.query.project);
       const cwd = resolveProject(project);
       const includeArchived = req.query.includeArchived === "true";
+      const cursor =
+        typeof req.query.cursor === "string" && req.query.cursor
+          ? req.query.cursor
+          : undefined;
+      const limitRaw = Number(req.query.limit);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(Math.floor(limitRaw), 100)
+          : 50;
       const result = await Agent.list({
         runtime: "local",
         cwd,
-        limit: 50,
+        limit,
+        ...(cursor ? { cursor } : {}),
       });
 
       const agents = (result.items || []).filter((a) => {
@@ -196,7 +206,7 @@ export function createRouter(sessions) {
 
       res.json({
         agents,
-        nextCursor: result.nextCursor,
+        nextCursor: result.nextCursor ?? null,
       });
     } catch (err) {
       next(err);
@@ -336,7 +346,11 @@ export function createRouter(sessions) {
       setupSse(res);
       const heartbeat = startHeartbeat(res);
       const replay = req.query.replay !== "0";
-      const unsubscribe = sessions.events.subscribe(id, res, { replay });
+      const afterSeq = Number(req.query.after) || 0;
+      const unsubscribe = sessions.events.subscribe(id, res, {
+        replay,
+        afterSeq,
+      });
 
       req.on("close", () => {
         clearInterval(heartbeat);

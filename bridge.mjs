@@ -1,4 +1,5 @@
 import "dotenv/config";
+import http from "http";
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -13,6 +14,7 @@ import { PROJECTS_ROOT } from "./server/projects.js";
 import { mountMcpProxy } from "./server/mcp-proxy.js";
 import { blockPublicUi, localUiOnly } from "./server/tunnel-access.js";
 import { requireRemoteApiKey } from "./server/remote-auth.js";
+import { attachSessionWebSocket } from "./server/session-ws.js";
 import {
   createTelegramWebhookHandler,
   maybeSetTelegramWebhookOnBoot,
@@ -30,6 +32,7 @@ const HOST = process.env.HOST ?? "127.0.0.1";
 
 const app = express();
 const sessions = new SessionManager();
+const server = http.createServer(app);
 
 app.use(cors());
 app.use(requireRemoteApiKey);
@@ -72,6 +75,7 @@ app.get(/^(?!\/api)(?!\/telegram)(?!\/cursor-bridge).*/, localUiOnly, (_req, res
 });
 
 ensureDevLogsDir();
+attachSessionWebSocket(server, sessions);
 
 function shutdown() {
   stopAllManagedDevServers();
@@ -80,8 +84,9 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-app.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);
+  console.log(`🔌 Session WebSocket: ws://${HOST}:${PORT}/api/sessions/:id/ws`);
   console.log(`📁 Projects root: ${PROJECTS_ROOT}`);
   if (!isTelegramEnabled()) {
     console.log("📴 Telegram disabled (TELEGRAM_ENABLED=0) — no outbound sends");

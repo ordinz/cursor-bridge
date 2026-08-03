@@ -81,8 +81,15 @@ export default defineConfig({
     port: 5173,
     allowedHosts: ["ordins-cursor-bridge.kairose.com"],
     proxy: {
-      "/api": "http://127.0.0.1:4242",
-      "/prompt": "http://127.0.0.1:4242",
+      "/api": {
+        target: "http://127.0.0.1:4242",
+        changeOrigin: true,
+        ws: true,
+      },
+      "/prompt": {
+        target: "http://127.0.0.1:4242",
+        changeOrigin: true,
+      },
     },
   },
 });

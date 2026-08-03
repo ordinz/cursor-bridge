@@ -1,16 +1,6 @@
 import type { Model, Project, Session } from "../lib/types";
 import { ModelPicker } from "./ModelPicker";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
-
-const triggerClass =
-  "h-7 min-h-7 w-auto max-w-[46%] gap-1 rounded-md border-0 bg-transparent px-1.5 py-0 text-xs text-zinc-400 shadow-none hover:bg-zinc-800/80 hover:text-zinc-200 focus-visible:border-0 focus-visible:ring-0 data-[size=default]:h-7 dark:bg-transparent dark:hover:bg-zinc-800/80";
+import { ProjectSelect } from "./ProjectSelect";
 
 interface SessionControlsProps {
   session: Session | null;
@@ -40,35 +30,13 @@ export function SessionControls({
       data-testid="session-controls"
       data-section="session-controls"
     >
-      <Select
-        value={project}
-        onValueChange={(value) => {
-          if (value != null) onProjectChange(value);
-        }}
-        items={projects.map((p) => ({ value: p.id, label: p.name }))}
-      >
-        <SelectTrigger
-          className={triggerClass}
-          size="sm"
-          aria-label="Project"
-          data-testid="project-select"
-        >
-          <SelectValue placeholder="Project" />
-        </SelectTrigger>
-        <SelectContent
-          alignItemWithTrigger={false}
-          align="start"
-          side="top"
-        >
-          <SelectGroup>
-            {projects.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+      <ProjectSelect
+        project={project}
+        projects={projects}
+        onProjectChange={onProjectChange}
+        side="top"
+        className="max-w-[46%]"
+      />
 
       <span className="text-zinc-700" aria-hidden>
         ·

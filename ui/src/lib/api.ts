@@ -66,11 +66,15 @@ export async function getModels() {
 
 export async function getAgents(
   project: string,
-  opts?: { includeArchived?: boolean },
+  opts?: { includeArchived?: boolean; cursor?: string; limit?: number },
 ) {
   const q = new URLSearchParams({ project });
   if (opts?.includeArchived) q.set("includeArchived", "true");
-  return json<{ agents: AgentInfo[] }>(`/api/agents?${q}`);
+  if (opts?.cursor) q.set("cursor", opts.cursor);
+  if (opts?.limit != null) q.set("limit", String(opts.limit));
+  return json<{ agents: AgentInfo[]; nextCursor?: string | null }>(
+    `/api/agents?${q}`,
+  );
 }
 
 export async function getAgentHistory(agentId: string, project: string) {

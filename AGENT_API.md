@@ -110,15 +110,31 @@ Returns the same shape as create/resume. Use this to poll session state between 
 
 ---
 
-### `GET /api/sessions/:id/events`
+### `WS /api/sessions/:id/ws`
 
-Long-lived **watch stream** for a session. Receives the same SSE events as `POST …/chat` (session, status, user, assistant deltas, tool_call, tool_result, error, done) plus `: heartbeat` comments every 15s.
-
-Use this to mirror runs in the oversight UI or any second client while another agent owns the chat POST.
+Preferred **real-time watch channel** for the oversight UI. Same JSON event objects as SSE (`assistant`, `tool_call`, `done`, …), each stamped with a monotonic `seq`.
 
 | Query | Default | Description |
 |-------|---------|-------------|
-| `replay` | `1` | When `1`, buffered events from the current run are sent immediately on connect. Set `replay=0` if the client already has history and only wants new events. |
+| `replay` | `1` | When `1`, replay buffered events with `seq > after` on connect |
+| `after` | `0` | Resume cursor — skip events with `seq <= after` |
+
+The server sends WebSocket ping frames ~every 20s. Clients may also send `{"type":"ping"}` and receive `{"type":"pong"}`. On disconnect, reconnect with `replay=1&after=<lastSeq>`.
+
+**SSE fallback:** `GET /api/sessions/:id/events` remains available for older clients.
+
+---
+
+### `GET /api/sessions/:id/events`
+
+Long-lived **SSE watch stream** for a session. Receives the same events as `POST …/chat` (session, status, user, assistant deltas, tool_call, tool_result, error, done) plus `: heartbeat` comments every 15s.
+
+Use this to mirror runs while another agent owns the chat POST. Prefer the WebSocket above when possible.
+
+| Query | Default | Description |
+|-------|---------|-------------|
+| `replay` | `1` | When `1`, replay buffered events from the current run on connect. Set `replay=0` if the client already has history and only wants new events. |
+| `after` | `0` | Skip buffered events with `seq <= after` |
 
 **404** if the session does not exist. The stream stays open until the client disconnects or the session is deleted.
 

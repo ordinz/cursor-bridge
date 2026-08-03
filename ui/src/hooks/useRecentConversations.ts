@@ -29,7 +29,6 @@ export type RecentAgent = AgentInfo & {
   sessionId?: string;
 };
 
-const RECENT_LIMIT = 40;
 const SESSION_POLL_LIVE_MS = 2_000;
 const SESSION_POLL_IDLE_MS = 5_000;
 const AGENTS_POLL_LIVE_MS = 30_000;
@@ -145,17 +144,15 @@ function mergeAgentsWithSessions(
     });
   }
 
-  return merged
-    .sort((a, b) => {
-      const diff =
-        sortActivityAt(b, reads[agentKey(b.project, b.agentId)]) -
-        sortActivityAt(a, reads[agentKey(a.project, a.agentId)]);
-      if (diff !== 0) return diff;
-      return agentKey(a.project, a.agentId).localeCompare(
-        agentKey(b.project, b.agentId),
-      );
-    })
-    .slice(0, RECENT_LIMIT);
+  return merged.sort((a, b) => {
+    const diff =
+      sortActivityAt(b, reads[agentKey(b.project, b.agentId)]) -
+      sortActivityAt(a, reads[agentKey(a.project, a.agentId)]);
+    if (diff !== 0) return diff;
+    return agentKey(a.project, a.agentId).localeCompare(
+      agentKey(b.project, b.agentId),
+    );
+  });
 }
 
 /**
@@ -186,7 +183,21 @@ function stabilizeOrder(
     );
   });
 
-  return [...newcomers, ...stable].slice(0, RECENT_LIMIT);
+  return [...newcomers, ...stable];
+}
+
+function mergeProjectAgents(
+  prev: Array<AgentInfo & { project: string }>,
+  next: Array<AgentInfo & { project: string }>,
+): Array<AgentInfo & { project: string }> {
+  const byKey = new Map(
+    prev.map((a) => [agentKey(a.project, a.agentId), a]),
+  );
+  for (const agent of next) {
+    const key = agentKey(agent.project, agent.agentId);
+    byKey.set(key, { ...byKey.get(key), ...agent });
+  }
+  return [...byKey.values()];
 }
 
 export function useRecentConversations(
@@ -202,10 +213,15 @@ export function useRecentConversations(
   const [reads, setReads] = useState<Record<string, ConversationReadEntry>>(
     {},
   );
+  const [cursors, setCursors] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
+  const loadedMoreRef = useRef(false);
+  const cursorsRef = useRef(cursors);
+  cursorsRef.current = cursors;
   const orderRef = useRef<string[]>([]);
   const liveRef = useRef(live);
   liveRef.current = live;
@@ -220,8 +236,13 @@ export function useRecentConversations(
       const ids = projectIds ? projectIds.split("\0") : [];
       if (!ids.length) {
         setAgentsRaw([]);
+        setCursors({});
+        loadedMoreRef.current = false;
         return;
       }
+
+      // Don't wipe deeper pages while the user is searching / showing more.
+      if (opts.silent && loadedMoreRef.current) return;
 
       const silent = opts.silent && hasLoadedRef.current;
       if (!silent) setLoading(true);
@@ -231,21 +252,33 @@ export function useRecentConversations(
           ids.map(async (project) => {
             try {
               const data = await getAgents(project, { includeArchived });
-              return data.agents
-                .map(
-                  (agent): AgentInfo & { project: string } => ({
-                    ...agent,
-                    project,
-                  }),
-                )
-                .filter((agent) => includeArchived || !agent.archived);
+              return {
+                project,
+                agents: data.agents
+                  .map(
+                    (agent): AgentInfo & { project: string } => ({
+                      ...agent,
+                      project,
+                    }),
+                  )
+                  .filter((agent) => includeArchived || !agent.archived),
+                nextCursor: data.nextCursor ?? null,
+              };
             } catch {
-              return [] as Array<AgentInfo & { project: string }>;
+              return {
+                project,
+                agents: [] as Array<AgentInfo & { project: string }>,
+                nextCursor: null as string | null,
+              };
             }
           }),
         );
 
-        setAgentsRaw(batches.flat());
+        setAgentsRaw(batches.flatMap((b) => b.agents));
+        setCursors(
+          Object.fromEntries(batches.map((b) => [b.project, b.nextCursor])),
+        );
+        loadedMoreRef.current = false;
         hasLoadedRef.current = true;
       } catch (err) {
         setError(
@@ -257,6 +290,74 @@ export function useRecentConversations(
     },
     [projectIds, includeArchived],
   );
+
+  const loadMore = useCallback(async () => {
+    const ids = projectIds ? projectIds.split("\0") : [];
+    const pending = ids.filter((id) => cursorsRef.current[id]);
+    if (!pending.length || loadingMore) return;
+
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const batches = await Promise.all(
+        pending.map(async (project) => {
+          const cursor = cursorsRef.current[project];
+          if (!cursor) {
+            return {
+              project,
+              agents: [] as Array<AgentInfo & { project: string }>,
+              nextCursor: null as string | null,
+            };
+          }
+          try {
+            const data = await getAgents(project, {
+              includeArchived,
+              cursor,
+            });
+            return {
+              project,
+              agents: data.agents
+                .map(
+                  (agent): AgentInfo & { project: string } => ({
+                    ...agent,
+                    project,
+                  }),
+                )
+                .filter((agent) => includeArchived || !agent.archived),
+              nextCursor: data.nextCursor ?? null,
+            };
+          } catch {
+            return {
+              project,
+              agents: [] as Array<AgentInfo & { project: string }>,
+              nextCursor: null as string | null,
+            };
+          }
+        }),
+      );
+
+      setAgentsRaw((prev) =>
+        mergeProjectAgents(
+          prev,
+          batches.flatMap((b) => b.agents),
+        ),
+      );
+      setCursors((prev) => {
+        const next = { ...prev };
+        for (const batch of batches) {
+          next[batch.project] = batch.nextCursor;
+        }
+        return next;
+      });
+      loadedMoreRef.current = true;
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load more chats",
+      );
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [projectIds, includeArchived, loadingMore]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -465,9 +566,17 @@ export function useRecentConversations(
     [agents],
   );
 
+  const hasMore = useMemo(
+    () => Object.values(cursors).some((c) => Boolean(c)),
+    [cursors],
+  );
+
   return {
     agents,
     loading,
+    loadingMore,
+    hasMore,
+    loadMore,
     deletingId: busyId,
     busyId,
     error,

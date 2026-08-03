@@ -12,14 +12,19 @@ export function createTestApp() {
 
 export async function withTestServer(fn) {
   const { app, sessions } = createTestApp();
-  const server = await new Promise((resolve) => {
-    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  const http = await import("node:http");
+  const { attachSessionWebSocket } = await import("./session-ws.js");
+  const server = http.createServer(app);
+  attachSessionWebSocket(server, sessions);
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
   });
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}/api`;
+  const wsBase = `ws://127.0.0.1:${port}/api`;
 
   try {
-    await fn({ sessions, base, server });
+    await fn({ sessions, base, wsBase, server });
   } finally {
     await new Promise((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));

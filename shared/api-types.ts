@@ -142,6 +142,8 @@ export interface SseEnvelope {
   type: string;
   sessionId: string | null;
   timestamp: string;
+  /** Monotonic per-session sequence for WebSocket resume. */
+  seq?: number;
 }
 
 export type SseEvent =
