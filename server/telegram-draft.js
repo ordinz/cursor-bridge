@@ -30,6 +30,8 @@ export function createDraftStreamer(opts = {}) {
   let startedStatusSent = false;
   let flushInFlight = null;
   let finalizedSent = false;
+  let lastProgressAt = 0;
+  let doneSent = false;
 
   function clearTimers() {
     if (timer) {
@@ -124,6 +126,35 @@ export function createDraftStreamer(opts = {}) {
       try {
         await sendTelegramMessage({
           text: "running…",
+          messageThreadId,
+        });
+      } catch {
+        // ignore
+      }
+    },
+
+    /** Throttled progress ping during long tool/shell work (no assistant text yet). */
+    async noteProgress(text) {
+      if (finalized || !text?.trim()) return;
+      const now = Date.now();
+      if (now - lastProgressAt < 4000) return;
+      lastProgressAt = now;
+      try {
+        await sendTelegramMessage({
+          text: `⏳ ${text}`.slice(0, 4000),
+          messageThreadId,
+        });
+      } catch {
+        // ignore
+      }
+    },
+
+    async noteDone() {
+      if (finalized || doneSent) return;
+      doneSent = true;
+      try {
+        await sendTelegramMessage({
+          text: "✅ done",
           messageThreadId,
         });
       } catch {

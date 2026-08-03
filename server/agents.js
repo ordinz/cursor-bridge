@@ -141,20 +141,36 @@ export async function finalizeAgentName({
   return name;
 }
 
-export async function deleteLocalAgent(agentId, project) {
-  const cwd = resolveProject(project);
+/**
+ * Cancel Cursor-side runs still marked running (e.g. bridge lost track after restart).
+ * @returns {Promise<number>} count cancelled
+ */
+export async function cancelStaleAgentRuns(agentId, cwd) {
   const platform = await createAgentPlatform({ workspaceRef: cwd });
+  const runs = await platform.listRuns(agentId, { limit: 20 });
+  let cancelled = 0;
 
-  const runs = await platform.listRuns(agentId, { limit: 100 });
   for (const run of runs.items) {
-    if (run.status === "running") {
-      if (run.supports("cancel")) {
+    if (run.status !== "running") continue;
+    try {
+      if (run.supports?.("cancel")) {
         await run.cancel();
       } else {
         await platform.cancelRun(run.id);
       }
+      cancelled++;
+    } catch {
+      // ignore per-run cancel failures
     }
   }
 
+  return cancelled;
+}
+
+export async function deleteLocalAgent(agentId, project) {
+  const cwd = resolveProject(project);
+  await cancelStaleAgentRuns(agentId, cwd);
+
+  const platform = await createAgentPlatform({ workspaceRef: cwd });
   await platform.deleteAgent(agentId);
 }

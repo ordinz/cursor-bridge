@@ -150,6 +150,46 @@ export async function telegramApi(method, body, opts = {}) {
   return data.result;
 }
 
+/**
+ * Resolve a Telegram file_id to a downloadable path (valid ~1 hour).
+ * @param {string} fileId
+ * @returns {Promise<{ file_id: string, file_unique_id?: string, file_size?: number, file_path?: string }>}
+ */
+export async function getTelegramFile(fileId) {
+  if (!fileId || typeof fileId !== "string") {
+    throw new TelegramSendError("file_id is required");
+  }
+  return telegramApi("getFile", { file_id: fileId });
+}
+
+/**
+ * Download a Telegram file by file_id into a Buffer.
+ * @param {string} fileId
+ * @returns {Promise<{ buffer: Buffer, filePath: string, fileSize: number|null }>}
+ */
+export async function downloadTelegramFile(fileId) {
+  const token = getTelegramBotToken();
+  if (!token) throw new TelegramNotConfiguredError();
+
+  const meta = await getTelegramFile(fileId);
+  const filePath = typeof meta?.file_path === "string" ? meta.file_path : "";
+  if (!filePath) {
+    throw new TelegramSendError("Telegram file_path missing (file too large or unavailable)");
+  }
+
+  const res = await fetch(`${TELEGRAM_API}/file/bot${token}/${filePath}`);
+  if (!res.ok) {
+    throw new TelegramSendError(`Telegram file download failed: HTTP ${res.status}`);
+  }
+  const ab = await res.arrayBuffer();
+  return {
+    buffer: Buffer.from(ab),
+    filePath,
+    fileSize:
+      typeof meta.file_size === "number" ? meta.file_size : ab.byteLength,
+  };
+}
+
 function chunkText(text, max) {
   if (text.length <= max) return [text];
   const chunks = [];

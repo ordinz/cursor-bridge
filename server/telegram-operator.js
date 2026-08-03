@@ -1,5 +1,5 @@
 import { nameFromPrompt } from "./agent-names.js";
-import { finalizeAgentName } from "./agents.js";
+import { finalizeAgentName, cancelStaleAgentRuns } from "./agents.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
 import { buildPromptWithDevLogs } from "./dev-logs.js";
 import { createSseEvent } from "./sse-events.js";
@@ -48,6 +48,10 @@ import {
   getTelegramPrefs,
   updateTelegramPrefs,
 } from "./telegram-prefs.js";
+import {
+  extractTelegramMedia,
+  resolveTelegramInboundContent,
+} from "./telegram-media.js";
 import {
   ensureAgentTelegramTopic,
   resolveTelegramThread,
@@ -119,6 +123,9 @@ function helpText() {
     "",
     "Inline buttons: phone toggle, stop, settings (model / agent·plan / dev logs).",
     "",
+    "Send **photos** (with optional caption) or **voice notes** in a project/agent topic.",
+    "Voice needs `OPENAI_API_KEY` (Whisper) on the bridge host.",
+    "",
     `\`/phone_on\` mirrors **Cursor Agents** into Telegram topics and streams live runs.`,
     "",
     `You can also start from ${projectList} (or \`/new\`) — each new agent gets its own topic.`,
@@ -183,6 +190,39 @@ function currentSettingsKeyboard() {
   return settingsKeyboard(prefs);
 }
 
+function toolProgressLabel(event) {
+  if (event.type !== "tool_call" || event.status !== "running") return null;
+  const name = event.name || "tool";
+  if (name === "Shell" || name === "shell") return "running shell command…";
+  if (name === "Grep" || name === "grep") return "searching codebase…";
+  if (name === "Read" || name === "read") return "reading files…";
+  if (name === "Task" || name === "task") return "running sub-agent…";
+  return `using ${name}…`;
+}
+
+function isAgentBusyError(err) {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  return /already has (?:an )?active run/i.test(msg);
+}
+
+/**
+ * @param {{ agent: object, agentId: string, cwd: string }} record
+ * @param {string|object} sendMessage
+ * @param {{ model: object, mode: string }} opts
+ */
+async function sendAgentMessage(record, sendMessage, opts) {
+  try {
+    return await record.agent.send(sendMessage, opts);
+  } catch (err) {
+    if (!isAgentBusyError(err)) throw err;
+    const cleared = await cancelStaleAgentRuns(record.agentId, record.cwd);
+    if (cleared > 0) {
+      return await record.agent.send(sendMessage, opts);
+    }
+    throw err;
+  }
+}
+
 /**
  * Run a chat turn for a project and stream assistant text to Telegram.
  * Spawns a per-agent forum topic when starting a new session (or /new).
@@ -195,6 +235,7 @@ function currentSettingsKeyboard() {
  *   forceNew?: boolean,
  *   sessionId?: string|null,
  *   announceFromThreadId?: number|null,
+ *   images?: { data: string, mimeType: string, dimension?: { width: number, height: number } }[],
  * }} opts
  */
 async function runProjectPrompt(sessions, opts) {
@@ -205,6 +246,7 @@ async function runProjectPrompt(sessions, opts) {
     forceNew = false,
     sessionId = null,
     announceFromThreadId = null,
+    images = undefined,
   } = opts;
 
   const prefs = getTelegramPrefs();
@@ -304,14 +346,32 @@ async function runProjectPrompt(sessions, opts) {
     }),
   );
   publish(
-    createSseEvent("user", id, { text: prompt, source: "telegram" }),
+    createSseEvent("user", id, {
+      text: prompt,
+      source: "telegram",
+      ...(images?.length ? { imageCount: images.length } : {}),
+    }),
   );
 
   try {
     await streamer.noteStarted();
 
     const abortController = new AbortController();
-    const run = await record.agent.send(agentPrompt, {
+    const sendMessage =
+      images?.length > 0
+        ? { text: agentPrompt, images }
+        : agentPrompt;
+
+    if (!record.activeRun) {
+      const cleared = await cancelStaleAgentRuns(record.agentId, record.cwd);
+      if (cleared > 0) {
+        console.log(
+          `[telegram] cleared ${cleared} stale run(s) on ${record.agentId.slice(0, 12)}…`,
+        );
+      }
+    }
+
+    const run = await sendAgentMessage(record, sendMessage, {
       model: { id: record.model || prefs.model },
       mode: record.mode === "plan" ? "plan" : "agent",
     });
@@ -328,6 +388,10 @@ async function runProjectPrompt(sessions, opts) {
         if (event.type === "assistant" && event.text) {
           sessions.noteAssistantText(id, event.text);
           streamer.push(event.text);
+        }
+        const progress = toolProgressLabel(event);
+        if (progress) {
+          void streamer.noteProgress(progress);
         }
       },
     });
@@ -347,6 +411,7 @@ async function runProjectPrompt(sessions, opts) {
     } else {
       sessions.clearActiveRun(id, "idle");
       await streamer.finalize();
+      await streamer.noteDone();
       await reply(streamThreadId, "Actions", {
         replyMarkup: postRunKeyboard({ busy: false }),
       }).catch(() => {});
@@ -482,6 +547,28 @@ async function doStop(sessions, ctx) {
     targets = sessions.listActiveRuns();
   }
   if (!targets.length) {
+    if (resolved.kind === "agent" && resolved.binding?.sessionId) {
+      const detail = sessions.getDetail(resolved.binding.sessionId);
+      if (detail) {
+        try {
+          const cleared = await cancelStaleAgentRuns(
+            detail.agentId,
+            detail.cwd,
+          );
+          if (cleared > 0) {
+            sessions.clearActiveRun(detail.sessionId, "cancelled");
+            await reply(
+              threadId,
+              `cleared ${cleared} stuck run(s) on this agent`,
+              { replyMarkup: controlsKeyboard() },
+            );
+            return;
+          }
+        } catch {
+          // fall through
+        }
+      }
+    }
     await reply(threadId, "no active runs", {
       replyMarkup: controlsKeyboard(),
     });
@@ -491,7 +578,14 @@ async function doStop(sessions, ctx) {
     try {
       await sessions.cancel(s.sessionId);
     } catch {
-      // ignore
+      try {
+        const cleared = await cancelStaleAgentRuns(s.agentId, s.cwd);
+        if (cleared > 0) {
+          sessions.clearActiveRun(s.sessionId, "cancelled");
+        }
+      } catch {
+        // ignore
+      }
     }
   }
   await reply(
@@ -563,10 +657,12 @@ async function doNew(sessions, ctx) {
  *   text: string,
  *   threadId: number|null,
  *   resolved: ReturnType<typeof resolveTelegramThread>,
+ *   message?: object|null,
  * }} msg
  */
 async function handleCommand(sessions, msg) {
-  const { text, threadId, resolved } = msg;
+  const { text, threadId, resolved, message = null } = msg;
+  const hasMedia = Boolean(message && extractTelegramMedia(message));
   // Menu picks arrive as /status@cursor_bridge_mbp_bot — strip @bot suffix.
   const trimmed = text
     .trim()
@@ -577,44 +673,47 @@ async function handleCommand(sessions, msg) {
 
   const ctx = { threadId, resolved };
 
-  if (
-    cmd === "/phone_on" ||
-    cmd === "/phoneon" ||
-    (cmd === "/phone" && args === "on")
-  ) {
-    await doPhoneOn(sessions, threadId);
-    return;
-  }
-  if (
-    cmd === "/phone_off" ||
-    cmd === "/phoneoff" ||
-    (cmd === "/phone" && args === "off")
-  ) {
-    await doPhoneOff(threadId);
-    return;
-  }
-  if (cmd === "/status" || (cmd === "/phone" && args === "")) {
-    await doStatus(sessions, threadId);
-    return;
-  }
-  if (cmd === "/settings" || cmd === "/prefs") {
-    await doSettings(threadId);
-    return;
-  }
-  if (cmd === "/help" || cmd === "/start") {
-    await doHelp(threadId);
-    return;
-  }
-  if (cmd === "/stop") {
-    await doStop(sessions, ctx);
-    return;
-  }
-  if (cmd === "/new") {
-    await doNew(sessions, ctx);
-    return;
+  // Slash commands only when there's no media attachment.
+  if (!hasMedia) {
+    if (
+      cmd === "/phone_on" ||
+      cmd === "/phoneon" ||
+      (cmd === "/phone" && args === "on")
+    ) {
+      await doPhoneOn(sessions, threadId);
+      return;
+    }
+    if (
+      cmd === "/phone_off" ||
+      cmd === "/phoneoff" ||
+      (cmd === "/phone" && args === "off")
+    ) {
+      await doPhoneOff(threadId);
+      return;
+    }
+    if (cmd === "/status" || (cmd === "/phone" && args === "")) {
+      await doStatus(sessions, threadId);
+      return;
+    }
+    if (cmd === "/settings" || cmd === "/prefs") {
+      await doSettings(threadId);
+      return;
+    }
+    if (cmd === "/help" || cmd === "/start") {
+      await doHelp(threadId);
+      return;
+    }
+    if (cmd === "/stop") {
+      await doStop(sessions, ctx);
+      return;
+    }
+    if (cmd === "/new") {
+      await doNew(sessions, ctx);
+      return;
+    }
   }
 
-  // Plain text prompt
+  // Plain text / media prompt
   if (resolved.kind === "status" || resolved.kind === "unknown") {
     if (resolved.kind === "status" || resolved.label === "general") {
       await reply(
@@ -648,18 +747,38 @@ async function handleCommand(sessions, msg) {
   const boundSessionId =
     resolved.kind === "agent" ? resolved.binding?.sessionId : null;
 
-  void enqueueProjectRun(project, () =>
-    runProjectPrompt(sessions, {
+  void enqueueProjectRun(project, async () => {
+    let prompt = trimmed;
+    let images;
+    if (hasMedia) {
+      await reply(threadId, hasMediaKindLabel(message), {
+        replyMarkup: postRunKeyboard({ busy: true }),
+      }).catch(() => {});
+      const inbound = await resolveTelegramInboundContent(message, trimmed);
+      prompt = inbound.text;
+      images = inbound.images;
+      if (inbound.transcription) {
+        await reply(
+          threadId,
+          `🎤 ${inbound.transcription}`,
+        ).catch(() => {});
+      }
+    }
+    if (!prompt.trim() && !(images?.length > 0)) {
+      throw new Error("empty prompt after media resolve");
+    }
+    return runProjectPrompt(sessions, {
       project,
-      prompt: trimmed,
+      prompt,
+      images,
       messageThreadId: threadId,
       sessionId: boundSessionId,
       // From a static project topic, announce + stream into a fresh agent topic.
       announceFromThreadId:
         resolved.kind === "project" ? threadId : null,
       forceNew: false,
-    }),
-  ).catch(async (err) => {
+    });
+  }).catch(async (err) => {
     console.error("[telegram] prompt failed:", err);
     await reply(
       threadId,
@@ -667,6 +786,18 @@ async function handleCommand(sessions, msg) {
       { replyMarkup: controlsKeyboard() },
     ).catch(() => {});
   });
+}
+
+function hasMediaKindLabel(message) {
+  const media = extractTelegramMedia(message);
+  if (!media) return "working…";
+  if (media.kind === "photo" || media.kind === "image_document") {
+    return "📷 Got image — sending to agent…";
+  }
+  if (media.kind === "voice" || media.kind === "audio") {
+    return "🎤 Transcribing voice…";
+  }
+  return "working…";
 }
 
 /**
@@ -913,7 +1044,8 @@ export function createTelegramWebhookHandler(sessions) {
           : typeof message.caption === "string"
             ? message.caption
             : "";
-      if (!text.trim()) return;
+      const hasMedia = Boolean(extractTelegramMedia(message));
+      if (!text.trim() && !hasMedia) return;
 
       const threadId =
         message.message_thread_id != null
@@ -925,6 +1057,7 @@ export function createTelegramWebhookHandler(sessions) {
         text,
         threadId,
         resolved,
+        message,
       });
     } catch (err) {
       console.error("[telegram] webhook handler error:", err);
