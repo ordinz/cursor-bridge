@@ -10,6 +10,7 @@ test("TELEGRAM_BOT_COMMANDS has unique valid names", () => {
     assert.ok(c.description.length > 0 && c.description.length <= 256);
   }
   assert.ok(names.includes("phone_on"));
+  assert.ok(names.includes("settings"));
   assert.ok(names.includes("help"));
 });
 

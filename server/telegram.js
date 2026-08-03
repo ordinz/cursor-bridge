@@ -183,7 +183,14 @@ function threadFields(opts) {
  * Send a permanent Telegram message (plain text).
  * Back-compat: `sendTelegramMessage("hello")` or options object.
  *
- * @param {string | { text: string, messageThreadId?: number|null, chatId?: string|number, replyToMessageId?: number, parseMode?: string }} messageOrOpts
+ * @param {string | {
+ *   text: string,
+ *   messageThreadId?: number|null,
+ *   chatId?: string|number,
+ *   replyToMessageId?: number,
+ *   parseMode?: string,
+ *   replyMarkup?: object|null,
+ * }} messageOrOpts
  */
 export async function sendTelegramMessage(messageOrOpts) {
   const opts =
@@ -200,7 +207,9 @@ export async function sendTelegramMessage(messageOrOpts) {
   const chunks = chunkText(text, TELEGRAM_MESSAGE_MAX_LENGTH);
   let lastMessageId = null;
 
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const isLast = i === chunks.length - 1;
     /** @type {Record<string, unknown>} */
     const body = {
       chat_id: chatId,
@@ -209,6 +218,10 @@ export async function sendTelegramMessage(messageOrOpts) {
     };
     if (opts.parseMode) {
       body.parse_mode = opts.parseMode;
+    }
+    // Attach keyboard only on the final chunk so buttons aren't orphaned mid-split.
+    if (isLast && opts.replyMarkup) {
+      body.reply_markup = opts.replyMarkup;
     }
     const result = await telegramApi("sendMessage", body);
     lastMessageId = result?.message_id ?? null;
@@ -228,6 +241,7 @@ export async function sendTelegramMessage(messageOrOpts) {
  *   chatId?: string|number,
  *   replyToMessageId?: number,
  *   plainFallback?: string,
+ *   replyMarkup?: object|null,
  * }} opts
  */
 export async function sendTelegramRichMessage(opts = {}) {
@@ -255,11 +269,16 @@ export async function sendTelegramRichMessage(opts = {}) {
       };
 
   try {
-    const result = await telegramApi("sendRichMessage", {
+    /** @type {Record<string, unknown>} */
+    const body = {
       chat_id: chatId,
       rich_message,
       ...threadFields(opts),
-    });
+    };
+    if (opts.replyMarkup) {
+      body.reply_markup = opts.replyMarkup;
+    }
+    const result = await telegramApi("sendRichMessage", body);
     return { ok: true, messageId: result?.message_id ?? null, rich: true };
   } catch (err) {
     console.warn(
@@ -271,6 +290,7 @@ export async function sendTelegramRichMessage(opts = {}) {
       messageThreadId: opts.messageThreadId,
       chatId: opts.chatId,
       replyToMessageId: opts.replyToMessageId,
+      replyMarkup: opts.replyMarkup,
     });
   }
 }
@@ -332,16 +352,65 @@ export async function sendTelegramRichMessageDraft(opts) {
 }
 
 /**
- * @param {{ messageId: number, text: string, messageThreadId?: number|null, chatId?: string|number }} opts
+ * @param {{
+ *   messageId: number,
+ *   text: string,
+ *   messageThreadId?: number|null,
+ *   chatId?: string|number,
+ *   replyMarkup?: object|null,
+ *   parseMode?: string,
+ * }} opts
  */
 export async function editTelegramMessageText(opts) {
   const chatId = requireChat(opts);
-  await telegramApi("editMessageText", {
+  /** @type {Record<string, unknown>} */
+  const body = {
     chat_id: chatId,
     message_id: opts.messageId,
     text: opts.text.slice(0, TELEGRAM_MESSAGE_MAX_LENGTH),
     ...threadFields(opts),
+  };
+  if (opts.parseMode) body.parse_mode = opts.parseMode;
+  if (opts.replyMarkup !== undefined) {
+    body.reply_markup = opts.replyMarkup ?? { inline_keyboard: [] };
+  }
+  await telegramApi("editMessageText", body);
+  return { ok: true };
+}
+
+/**
+ * @param {{
+ *   messageId: number,
+ *   replyMarkup?: object|null,
+ *   chatId?: string|number,
+ * }} opts
+ */
+export async function editTelegramReplyMarkup(opts) {
+  const chatId = requireChat(opts);
+  await telegramApi("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: opts.messageId,
+    reply_markup: opts.replyMarkup ?? { inline_keyboard: [] },
   });
+  return { ok: true };
+}
+
+/**
+ * @param {{
+ *   callbackQueryId: string,
+ *   text?: string,
+ *   showAlert?: boolean,
+ * }} opts
+ */
+export async function answerTelegramCallbackQuery(opts) {
+  if (!opts.callbackQueryId) {
+    throw new TelegramSendError("callbackQueryId required");
+  }
+  /** @type {Record<string, unknown>} */
+  const body = { callback_query_id: opts.callbackQueryId };
+  if (opts.text) body.text = opts.text.slice(0, 200);
+  if (opts.showAlert) body.show_alert = true;
+  await telegramApi("answerCallbackQuery", body);
   return { ok: true };
 }
 
@@ -363,7 +432,7 @@ export async function setTelegramWebhook(opts = {}) {
   await telegramApi("setWebhook", {
     url,
     secret_token: secret,
-    allowed_updates: ["message"],
+    allowed_updates: ["message", "callback_query"],
     drop_pending_updates: false,
   });
   return { ok: true, url };
@@ -380,6 +449,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   },
   { command: "phone_off", description: "Stop IDE mirror + phone prompts" },
   { command: "status", description: "Health, sessions, IDE mirror" },
+  { command: "settings", description: "Model, mode, toggles (inline buttons)" },
   { command: "stop", description: "Cancel active Cursor run(s)" },
   { command: "new", description: "New session in this project topic" },
   { command: "help", description: "List commands" },

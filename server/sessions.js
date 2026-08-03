@@ -102,16 +102,18 @@ export class SessionManager {
     return record;
   }
 
-  async create({ project, model = "default" }) {
+  async create({ project, model = "default", mode = "agent" }) {
     const cwd = resolveProject(project);
     const sessionId = this.createId();
     const name = buildAgentName({ project, model });
     const now = Date.now();
+    const agentMode = mode === "plan" ? "plan" : "agent";
 
     const agent = await Agent.create({
       apiKey: process.env.CURSOR_API_KEY,
       name,
       model: { id: model },
+      mode: agentMode,
       local: { cwd },
     });
 
@@ -122,6 +124,7 @@ export class SessionManager {
       project,
       cwd,
       model,
+      mode: agentMode,
       name,
       namedFromPrompt: false,
       namingScheduled: false,
@@ -148,7 +151,7 @@ export class SessionManager {
     record.lastActivityAt = Date.now();
   }
 
-  async resumeAgent({ agentId, project, model = "default" }) {
+  async resumeAgent({ agentId, project, model = "default", mode = "agent" }) {
     const cwd = resolveProject(project);
     const sessionId = this.createId();
     const { name: storedName, namedFromPrompt } = await getLocalAgentMeta(
@@ -156,10 +159,12 @@ export class SessionManager {
       project,
     );
     const now = Date.now();
+    const agentMode = mode === "plan" ? "plan" : "agent";
 
     const agent = await Agent.resume(agentId, {
       apiKey: process.env.CURSOR_API_KEY,
       model: { id: model },
+      mode: agentMode,
       local: { cwd },
     });
 
@@ -170,6 +175,7 @@ export class SessionManager {
       project,
       cwd,
       model,
+      mode: agentMode,
       name: storedName ?? buildAgentName({ project, model }),
       namedFromPrompt,
       namingScheduled: false,
@@ -186,6 +192,22 @@ export class SessionManager {
     this.sessions.set(sessionId, record);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
+  }
+
+  /** @param {string} sessionId @param {string} model */
+  setModel(sessionId, model) {
+    const record = this.get(sessionId);
+    if (!record || typeof model !== "string" || !model.trim()) return;
+    record.model = model.trim();
+    record.lastActivityAt = Date.now();
+  }
+
+  /** @param {string} sessionId @param {"agent"|"plan"} mode */
+  setMode(sessionId, mode) {
+    const record = this.get(sessionId);
+    if (!record) return;
+    record.mode = mode === "plan" ? "plan" : "agent";
+    record.lastActivityAt = Date.now();
   }
 
   setInterimName(sessionId, name) {
@@ -321,6 +343,7 @@ function toPublicSession(record) {
     project: record.project,
     cwd: record.cwd,
     model: record.model,
+    mode: record.mode === "plan" ? "plan" : "agent",
     name: record.name,
     telegramThreadId: record.telegramThreadId ?? null,
     runStatus: record.runStatus,
