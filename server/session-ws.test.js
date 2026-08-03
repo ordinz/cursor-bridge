@@ -2,11 +2,35 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import WebSocket from "ws";
 import { createSseEvent } from "./sse-events.js";
-import { SessionEventHub } from "./session-events.js";
-import { seedIdleSession, withTestServer } from "./test-http.js";
+import { useTempBridgeDb } from "./test-db.js";
+import { persistSessionRecord } from "./db.js";
+
+useTempBridgeDb();
+const { SessionEventHub } = await import("./session-events.js");
+const { seedIdleSession, withTestServer } = await import("./test-http.js");
 
 test("SessionEventHub fans out to WebSocket subscribers with seq", () => {
+  useTempBridgeDb();
   const hub = new SessionEventHub();
+  const sid = "s-fanout";
+  persistSessionRecord({
+    sessionId: sid,
+    agentId: "a",
+    project: "app",
+    cwd: "/tmp",
+    model: "default",
+    mode: "agent",
+    name: "t",
+    namedFromPrompt: false,
+    runStatus: "idle",
+    lastPrompt: null,
+    lastAssistantSnippet: null,
+    createdAt: Date.now(),
+    lastActivityAt: Date.now(),
+    listActivityAt: 0,
+    telegramThreadId: null,
+  });
+
   /** @type {object[]} */
   const received = [];
   const ws = {
@@ -16,8 +40,8 @@ test("SessionEventHub fans out to WebSocket subscribers with seq", () => {
     },
   };
 
-  hub.subscribeWs("s1", /** @type {any} */ (ws), { replay: false });
-  hub.publish("s1", createSseEvent("assistant", "s1", { text: "hi" }));
+  hub.subscribeWs(sid, /** @type {any} */ (ws), { replay: false });
+  hub.publish(sid, createSseEvent("assistant", sid, { text: "hi" }));
 
   assert.equal(received.length, 1);
   assert.equal(received[0].type, "assistant");
@@ -26,10 +50,30 @@ test("SessionEventHub fans out to WebSocket subscribers with seq", () => {
 });
 
 test("SessionEventHub replays only events after afterSeq", () => {
+  useTempBridgeDb();
   const hub = new SessionEventHub();
-  hub.publish("s1", createSseEvent("assistant", "s1", { text: "a" }));
-  hub.publish("s1", createSseEvent("assistant", "s1", { text: "b" }));
-  hub.publish("s1", createSseEvent("assistant", "s1", { text: "c" }));
+  const sid = "s-replay";
+  persistSessionRecord({
+    sessionId: sid,
+    agentId: "a",
+    project: "app",
+    cwd: "/tmp",
+    model: "default",
+    mode: "agent",
+    name: "t",
+    namedFromPrompt: false,
+    runStatus: "idle",
+    lastPrompt: null,
+    lastAssistantSnippet: null,
+    createdAt: Date.now(),
+    lastActivityAt: Date.now(),
+    listActivityAt: 0,
+    telegramThreadId: null,
+  });
+
+  hub.publish(sid, createSseEvent("assistant", sid, { text: "a" }));
+  hub.publish(sid, createSseEvent("assistant", sid, { text: "b" }));
+  hub.publish(sid, createSseEvent("assistant", sid, { text: "c" }));
 
   /** @type {object[]} */
   const received = [];
@@ -40,7 +84,7 @@ test("SessionEventHub replays only events after afterSeq", () => {
     },
   };
 
-  hub.subscribeWs("s1", /** @type {any} */ (ws), { replay: true, afterSeq: 1 });
+  hub.subscribeWs(sid, /** @type {any} */ (ws), { replay: true, afterSeq: 1 });
   assert.deepEqual(
     received.map((e) => e.text),
     ["b", "c"],

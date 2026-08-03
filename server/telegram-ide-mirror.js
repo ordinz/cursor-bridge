@@ -10,8 +10,7 @@ import {
   renameAgentTelegramTopic,
 } from "./telegram-topics.js";
 import { sendTelegramMessage } from "./telegram.js";
-import fs from "fs";
-import path from "path";
+import { kvGet, kvSet } from "./db.js";
 
 const POLL_MS = Number(process.env.TELEGRAM_IDE_MIRROR_POLL_MS ?? 4000);
 const RECENT_MS = Number(
@@ -28,14 +27,7 @@ const TOPIC_CREATE_GAP_MS = Number(
   process.env.TELEGRAM_IDE_MIRROR_TOPIC_GAP_MS ?? 1200,
 );
 
-const STATE_PATH = path.resolve(
-  process.env.TELEGRAM_IDE_MIRROR_STORE ??
-    path.join(
-      process.env.HOME || "",
-      ".cursor-bridge",
-      "telegram-ide-mirror.json",
-    ),
-);
+const KV_KEY = "telegram-ide-mirror";
 
 /** @type {ReturnType<typeof setInterval>|null} */
 let pollTimer = null;
@@ -51,8 +43,8 @@ let stateCache = null;
 function loadState() {
   if (stateCache) return stateCache;
   try {
-    if (fs.existsSync(STATE_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+    const raw = kvGet(KV_KEY, null);
+    if (raw && typeof raw === "object") {
       stateCache = {
         seenByAgent: raw.seenByAgent || {},
         bootstrapped: raw.bootstrapped || {},
@@ -69,14 +61,13 @@ function loadState() {
 function saveState() {
   const state = loadState();
   try {
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     // Cap seen ids per agent
     for (const [agentId, ids] of Object.entries(state.seenByAgent)) {
       if (ids.length > 400) {
         state.seenByAgent[agentId] = ids.slice(-300);
       }
     }
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    kvSet(KV_KEY, state);
   } catch (err) {
     console.warn("[ide-mirror] state save failed:", err?.message || err);
   }
@@ -489,4 +480,9 @@ export function isIdeMirrorStreamingAgent(agentId) {
 export function _resetIdeMirrorStateForTests() {
   stopIdeAgentMirror();
   stateCache = { seenByAgent: {}, bootstrapped: {} };
+  try {
+    kvSet(KV_KEY, stateCache);
+  } catch {
+    /* db may be unset in isolated unit tests */
+  }
 }

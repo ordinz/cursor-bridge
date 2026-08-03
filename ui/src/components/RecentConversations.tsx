@@ -30,9 +30,11 @@ interface RecentConversationsProps {
   showArchived?: boolean;
   loadingMore?: boolean;
   hasMore?: boolean;
+  searchingServer?: boolean;
   className?: string;
   onShowArchivedChange?: (show: boolean) => void;
   onLoadMore?: () => Promise<void>;
+  onSearchServer?: (query: string) => Promise<void>;
   onResumeAgent: (agentId: string, project: string) => void;
   onArchiveAgent: (agentId: string, project: string) => void;
   onUnarchiveAgent: (agentId: string, project: string) => void;
@@ -135,53 +137,23 @@ function AgentArchiveButton({
   const label = agent.name?.trim() || agent.agentId.slice(0, 16);
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        disabled={busy}
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="mt-2.5 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
-            data-testid="recent-archive-button"
-            data-agent-id={agent.agentId}
-            aria-label={`Archive ${label}`}
-            title="Archive agent"
-          />
-        }
-      >
-        {busy ? (
-          <span className="text-sm">…</span>
-        ) : (
-          <ArchiveIcon className="size-4" />
-        )}
-      </AlertDialogTrigger>
-      <AlertDialogContent size="sm" data-testid="recent-archive-dialog">
-        <AlertDialogHeader>
-          <AlertDialogMedia>
-            <ArchiveIcon />
-          </AlertDialogMedia>
-          <AlertDialogTitle>Archive agent?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span className="font-medium text-foreground">“{label}”</span> (
-            {agent.project}) moves out of History and Recent. Toggle “Show
-            archived” to find it again, or reopen it to bring it back
-            automatically.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel data-testid="recent-archive-cancel">
-            Cancel
-          </AlertDialogCancel>
-          <AlertDialogAction
-            data-testid="recent-archive-confirm"
-            onClick={onArchive}
-          >
-            Archive
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <Button
+      variant="ghost"
+      size="icon"
+      disabled={busy}
+      className="mt-2.5 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+      data-testid="recent-archive-button"
+      data-agent-id={agent.agentId}
+      aria-label={`Archive ${label}`}
+      title="Archive agent"
+      onClick={onArchive}
+    >
+      {busy ? (
+        <span className="text-sm">…</span>
+      ) : (
+        <ArchiveIcon className="size-4" />
+      )}
+    </Button>
   );
 }
 
@@ -289,9 +261,11 @@ export function RecentConversations({
   showArchived = false,
   loadingMore = false,
   hasMore = false,
+  searchingServer = false,
   className = "",
   onShowArchivedChange,
   onLoadMore,
+  onSearchServer,
   onResumeAgent,
   onArchiveAgent,
   onUnarchiveAgent,
@@ -307,14 +281,19 @@ export function RecentConversations({
   const loadMore = useCallback(async () => {
     await onLoadMore?.();
   }, [onLoadMore]);
+  const searchServer = useCallback(
+    async (q: string) => {
+      await onSearchServer?.(q);
+    },
+    [onSearchServer],
+  );
 
   const { filtered, searchingDeeper } = useAgentListSearch({
     agents,
     query,
     match,
-    hasMore: Boolean(onLoadMore) && hasMore,
-    loadingMore,
-    loadMore,
+    searchServer: onSearchServer ? searchServer : undefined,
+    searchingServer,
   });
 
   const { visible, olderCount } = useMemo(() => {

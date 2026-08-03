@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import {
+import { useTempBridgeDb } from "./test-db.js";
+
+useTempBridgeDb();
+
+const {
   _resetIdeMirrorStateForTests,
   getIdeMirrorStatus,
   stopIdeAgentMirror,
-} from "./telegram-ide-mirror.js";
+} = await import("./telegram-ide-mirror.js");
 
 before(() => {
+  useTempBridgeDb();
   _resetIdeMirrorStateForTests();
 });
 

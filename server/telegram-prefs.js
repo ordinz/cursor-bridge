@@ -1,14 +1,8 @@
-import fs from "fs";
-import os from "os";
-import path from "path";
+import { kvGet, kvSet } from "./db.js";
 
-const STATE_DIR = path.join(os.homedir(), ".cursor-bridge");
-const STATE_FILE = path.join(STATE_DIR, "telegram-prefs.json");
+const KV_KEY = "telegram-prefs";
 
 /** @typedef {"agent" | "plan"} TelegramAgentMode */
-
-/** @type {{ model: string, mode: TelegramAgentMode, includeDevLogs: boolean } | null} */
-let cached = null;
 
 function defaultState() {
   return {
@@ -23,35 +17,20 @@ function normalizeMode(value) {
 }
 
 function readState() {
-  if (cached) return cached;
-  try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    cached = {
-      model:
-        typeof parsed?.model === "string" && parsed.model.trim()
-          ? parsed.model.trim()
-          : "default",
-      mode: normalizeMode(parsed?.mode),
-      includeDevLogs: Boolean(parsed?.includeDevLogs),
-    };
-  } catch {
-    cached = defaultState();
-  }
-  return cached;
+  const parsed = kvGet(KV_KEY, null);
+  if (!parsed || typeof parsed !== "object") return defaultState();
+  return {
+    model:
+      typeof parsed.model === "string" && parsed.model.trim()
+        ? parsed.model.trim()
+        : "default",
+    mode: normalizeMode(parsed.mode),
+    includeDevLogs: Boolean(parsed.includeDevLogs),
+  };
 }
 
 function writeState(next) {
-  cached = next;
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  } catch (err) {
-    console.warn(
-      "[telegram] failed to persist prefs:",
-      err instanceof Error ? err.message : err,
-    );
-  }
+  kvSet(KV_KEY, next);
 }
 
 export function getTelegramPrefs() {
@@ -81,5 +60,9 @@ export function updateTelegramPrefs(patch = {}) {
 
 /** Test helper */
 export function _resetTelegramPrefsForTests(state = null) {
-  cached = state ? { ...defaultState(), ...state } : null;
+  if (!state) {
+    kvSet(KV_KEY, defaultState());
+    return;
+  }
+  kvSet(KV_KEY, { ...defaultState(), ...state });
 }

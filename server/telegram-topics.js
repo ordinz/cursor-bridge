@@ -1,18 +1,16 @@
-import fs from "fs";
-import path from "path";
+import {
+  getDb,
+  getTelegramTopicByAgentId,
+  getTelegramTopicBySessionId,
+  getTelegramTopicByThreadId,
+  listTelegramTopics,
+  upsertTelegramTopic,
+} from "./db.js";
 import {
   getTelegramChatId,
   getTelegramTopicMap,
   telegramApi,
 } from "./telegram.js";
-
-const STORE_PATH = path.resolve(
-  process.env.TELEGRAM_TOPIC_STORE ??
-    path.join(process.env.HOME || "", ".cursor-bridge", "telegram-agent-topics.json"),
-);
-
-/** @type {{ byThreadId: Record<string, TopicBinding>, bySessionId: Record<string, number> }} */
-let cache = null;
 
 /**
  * @typedef {{
@@ -29,32 +27,14 @@ function agentTopicsEnabled() {
   return process.env.TELEGRAM_AGENT_TOPICS !== "0";
 }
 
-function loadStore() {
-  if (cache) return cache;
-  try {
-    if (fs.existsSync(STORE_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
-      cache = {
-        byThreadId: raw.byThreadId || {},
-        bySessionId: raw.bySessionId || {},
-      };
-      return cache;
-    }
-  } catch (err) {
-    console.warn("[telegram-topics] failed to load store:", err?.message || err);
+function loadStoreShape() {
+  const byThreadId = {};
+  const bySessionId = {};
+  for (const binding of listTelegramTopics()) {
+    byThreadId[String(binding.threadId)] = binding;
+    bySessionId[binding.sessionId] = binding.threadId;
   }
-  cache = { byThreadId: {}, bySessionId: {} };
-  return cache;
-}
-
-function saveStore() {
-  const store = loadStore();
-  try {
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
-  } catch (err) {
-    console.warn("[telegram-topics] failed to save store:", err?.message || err);
-  }
+  return { byThreadId, bySessionId };
 }
 
 /** Telegram forum topic titles are limited to 128 chars. */
@@ -74,8 +54,7 @@ export function formatAgentTopicName(project, name) {
  */
 export function getBindingByThreadId(threadId) {
   if (threadId == null) return null;
-  const store = loadStore();
-  return store.byThreadId[String(threadId)] || null;
+  return getTelegramTopicByThreadId(threadId);
 }
 
 /**
@@ -84,10 +63,7 @@ export function getBindingByThreadId(threadId) {
  */
 export function getBindingBySessionId(sessionId) {
   if (!sessionId) return null;
-  const store = loadStore();
-  const threadId = store.bySessionId[sessionId];
-  if (threadId == null) return null;
-  return store.byThreadId[String(threadId)] || null;
+  return getTelegramTopicBySessionId(sessionId);
 }
 
 /**
@@ -96,11 +72,7 @@ export function getBindingBySessionId(sessionId) {
  */
 export function getBindingByAgentId(agentId) {
   if (!agentId) return null;
-  const store = loadStore();
-  for (const binding of Object.values(store.byThreadId)) {
-    if (binding?.agentId === agentId) return binding;
-  }
-  return null;
+  return getTelegramTopicByAgentId(agentId);
 }
 
 /**
@@ -145,16 +117,16 @@ export async function ensureAgentTelegramTopic(session) {
   // Reuse topic if this IDE/SDK agent was mirrored before (new bridge session).
   const byAgent = getBindingByAgentId(session.agentId);
   if (byAgent) {
-    byAgent.sessionId = session.sessionId;
-    byAgent.project = session.project || byAgent.project;
-    if (session.name) {
-      byAgent.name = formatAgentTopicName(session.project, session.name);
-    }
-    const store = loadStore();
-    store.byThreadId[String(byAgent.threadId)] = byAgent;
-    store.bySessionId[session.sessionId] = byAgent.threadId;
-    saveStore();
-    return byAgent;
+    const updated = {
+      ...byAgent,
+      sessionId: session.sessionId,
+      project: session.project || byAgent.project,
+      name: session.name
+        ? formatAgentTopicName(session.project, session.name)
+        : byAgent.name,
+    };
+    upsertTelegramTopic(updated);
+    return updated;
   }
 
   const name = formatAgentTopicName(session.project, session.name);
@@ -181,12 +153,7 @@ export async function ensureAgentTelegramTopic(session) {
       createdAt: Date.now(),
     };
 
-    const store = loadStore();
-    store.byThreadId[String(binding.threadId)] = binding;
-    store.bySessionId[session.sessionId] = binding.threadId;
-    saveStore();
-
-    // Skip welcome spam during bulk IDE mirror; topic title is enough.
+    upsertTelegramTopic(binding);
     return binding;
   } catch (err) {
     console.warn(
@@ -217,11 +184,9 @@ export async function renameAgentTelegramTopic(sessionId, project, name) {
       message_thread_id: binding.threadId,
       name: nextName,
     });
-    binding.name = nextName;
-    const store = loadStore();
-    store.byThreadId[String(binding.threadId)] = binding;
-    saveStore();
-    return binding;
+    const updated = { ...binding, name: nextName };
+    upsertTelegramTopic(updated);
+    return updated;
   } catch (err) {
     console.warn(
       "[telegram-topics] editForumTopic failed:",
@@ -233,12 +198,12 @@ export async function renameAgentTelegramTopic(sessionId, project, name) {
 
 /** Test helpers */
 export function _resetTelegramTopicStoreForTests() {
-  cache = { byThreadId: {}, bySessionId: {} };
+  getDb().prepare(`DELETE FROM telegram_topics`).run();
 }
 
 /** @param {TopicBinding} binding */
 export function _registerBindingForTests(binding) {
-  const store = loadStore();
-  store.byThreadId[String(binding.threadId)] = binding;
-  store.bySessionId[binding.sessionId] = binding.threadId;
+  upsertTelegramTopic(binding);
 }
+
+export { loadStoreShape as _loadTelegramTopicStoreForTests };

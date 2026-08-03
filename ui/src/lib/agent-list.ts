@@ -1,9 +1,6 @@
 /** Default Recent hub window before “Show more”. */
 export const RECENT_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
-/** Cap how many server pages search-deeper will walk. */
-export const SEARCH_DEEPER_MAX_PAGES = 6;
-
 export function agentActivityAt(agent: {
   listActivityAt?: number;
   lastActivityAt?: number;

@@ -112,22 +112,22 @@ function mergeAgentsWithSessions(
     };
   });
 
-  // Surface in-memory sessions that aren't in the Cursor agent list yet.
+  // Surface in-memory sessions that aren't in the Cursor agent list yet
+  // (brand-new creates). Idle leftovers for archived agents must not
+  // reappear here — archive filters them from Agent.list but open
+  // sessions would otherwise resurrect the row in Recent.
   for (const session of sessions) {
     const key = agentKey(session.project, session.agentId);
     if (merged.some((a) => agentKey(a.project, a.agentId) === key)) continue;
     const entry = reads[key];
     const runActive = Boolean(session.runActive);
+    if (!runActive) continue;
     merged.push({
       agentId: session.agentId,
       name: session.name?.trim() || "",
       summary: "",
       lastModified: session.lastActivityAt,
-      status: runActive
-        ? "running"
-        : session.runStatus === "error"
-          ? "error"
-          : "finished",
+      status: "running",
       project: session.project,
       runActive,
       runStatus: normalizeRunStatus(runActive, session.runStatus, undefined),
@@ -359,6 +359,56 @@ export function useRecentConversations(
     }
   }, [projectIds, includeArchived, loadingMore]);
 
+  const [searchingServer, setSearchingServer] = useState(false);
+
+  const searchServer = useCallback(
+    async (q: string) => {
+      const ids = projectIds ? projectIds.split("\0") : [];
+      const needle = q.trim();
+      if (!ids.length || !needle) return;
+
+      setSearchingServer(true);
+      setError(null);
+      try {
+        const batches = await Promise.all(
+          ids.map(async (project) => {
+            try {
+              const data = await getAgents(project, {
+                includeArchived,
+                q: needle,
+              });
+              return data.agents
+                .map(
+                  (agent): AgentInfo & { project: string } => ({
+                    ...agent,
+                    project,
+                  }),
+                )
+                .filter((agent) => includeArchived || !agent.archived);
+            } catch {
+              return [] as Array<AgentInfo & { project: string }>;
+            }
+          }),
+        );
+
+        setAgentsRaw((prev) =>
+          mergeProjectAgents(
+            prev,
+            batches.flat(),
+          ),
+        );
+        loadedMoreRef.current = true;
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to search chats",
+        );
+      } finally {
+        setSearchingServer(false);
+      }
+    },
+    [projectIds, includeArchived],
+  );
+
   const refreshSessions = useCallback(async () => {
     try {
       const data = await getSessions();
@@ -577,6 +627,8 @@ export function useRecentConversations(
     loadingMore,
     hasMore,
     loadMore,
+    searchingServer,
+    searchServer,
     deletingId: busyId,
     busyId,
     error,

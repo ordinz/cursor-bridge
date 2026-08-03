@@ -90,6 +90,27 @@ function newDraftKeyFor(draftKey: string): string | null {
   return `${project}:new`;
 }
 
+/** Only migrate `:new` → agent when that is the actual navigation we just took. */
+function shouldMigrateFromNew(
+  prevKey: string | null,
+  nextKey: string,
+): boolean {
+  if (!prevKey || prevKey === nextKey) return false;
+  const prevSep = prevKey.indexOf(":");
+  const nextSep = nextKey.indexOf(":");
+  if (prevSep < 0 || nextSep < 0) return false;
+  const prevProject = prevKey.slice(0, prevSep);
+  const prevAgent = prevKey.slice(prevSep + 1);
+  const nextProject = nextKey.slice(0, nextSep);
+  const nextAgent = nextKey.slice(nextSep + 1);
+  return (
+    Boolean(prevProject) &&
+    prevProject === nextProject &&
+    prevAgent === "new" &&
+    nextAgent !== "new"
+  );
+}
+
 function loadDraft(draftKey: string): StoredDraft | null {
   try {
     const raw = localStorage.getItem(draftStorageKey(draftKey));
@@ -116,10 +137,13 @@ function isEmptyDraft(draft: StoredDraft | null): boolean {
   return !draft || (!draft.prompt && draft.images.length === 0);
 }
 
-/** Load draft for key; if empty after new→agent transition, take over `:new`. */
-function loadDraftWithMigration(draftKey: string): StoredDraft | null {
+/** Load draft for key; optionally take over `:new` after a real new→agent transition. */
+function loadDraftWithMigration(
+  draftKey: string,
+  migrateFromNew: boolean,
+): StoredDraft | null {
   const draft = loadDraft(draftKey);
-  if (!isEmptyDraft(draft)) return draft;
+  if (!migrateFromNew || !isEmptyDraft(draft)) return draft;
 
   const fromNewKey = newDraftKeyFor(draftKey);
   if (!fromNewKey) return draft;
@@ -371,6 +395,13 @@ export function PromptInput({
   const wasRunningRef = useRef(running);
   /** One automatic drain when opening a thread that already has a saved queue. */
   const idleMountDrainRef = useRef(true);
+  const prevDraftKeyRef = useRef<string | null>(null);
+  /** Set when sending/queueing from `:new` so only that kickoff may claim the draft. */
+  const pendingNewMigrationRef = useRef(false);
+  const promptRef = useRef(prompt);
+  const imagesRef = useRef(images);
+  promptRef.current = prompt;
+  imagesRef.current = images;
   const titleId = useId();
   const {
     queue,
@@ -380,16 +411,37 @@ export function PromptInput({
     take,
     shift,
     unshift,
-  } = useMessageQueue(draftKey);
+  } = useMessageQueue(draftKey, () => pendingNewMigrationRef.current);
 
   useEffect(() => {
-    // Don't clobber an in-flight composer clear/send when the draft key
-    // migrates from `:new` → real agent id mid-request.
-    if (sendingRef.current) {
+    const prev = prevDraftKeyRef.current;
+    const migrateFromNew =
+      shouldMigrateFromNew(prev, draftKey) && pendingNewMigrationRef.current;
+    if (migrateFromNew) pendingNewMigrationRef.current = false;
+
+    // Flush the outgoing conversation's composer before swapping keys so a
+    // fast switch can't drop the last keystroke (save effect skips while keys differ).
+    if (prev && prev !== draftKey && hydratedKey === prev) {
+      saveDraft(prev, {
+        prompt: promptRef.current,
+        images: imagesRef.current.map(({ id, name, dataUrl, bytes }) => ({
+          id,
+          name,
+          dataUrl,
+          bytes,
+        })),
+      });
+    }
+    prevDraftKeyRef.current = draftKey;
+
+    // Mid-send `:new` → agent: keep composer as-is (cleared, or a follow-up typed
+    // during the request). Unrelated switches always hydrate the target draft.
+    if (sendingRef.current && migrateFromNew) {
       setHydratedKey(draftKey);
       return;
     }
-    const draft = loadDraftWithMigration(draftKey);
+
+    const draft = loadDraftWithMigration(draftKey, migrateFromNew);
     setPrompt(draft?.prompt ?? "");
     setImages(draftToAttachments(draft));
     setImageError(null);
@@ -397,6 +449,8 @@ export function PromptInput({
     setSending(false);
     idleMountDrainRef.current = true;
     pauseDrainRef.current = false;
+    // hydratedKey/prompt/images intentionally read via refs / previous render only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
 
   useEffect(() => {
@@ -471,25 +525,30 @@ export function PromptInput({
     return ok;
   }
 
-  // A new run clears a previous drain pause (failed auto-send).
+  // Drain the queue when a run finishes (or once on idle mount with a saved queue).
   useEffect(() => {
-    if (running) pauseDrainRef.current = false;
-  }, [running]);
+    if (running) {
+      wasRunningRef.current = true;
+      pauseDrainRef.current = false;
+      return;
+    }
 
-  // Drain the queue when a run finishes (not on every failed retry).
-  useEffect(() => {
-    const becameIdle = wasRunningRef.current && !running;
-    wasRunningRef.current = running;
-
-    if (running || disabled || sending || drainingRef.current) return;
-    if (queue.length === 0) return;
+    // Stay armed while blocked so a later idle tick can still drain.
+    if (disabled || sending || drainingRef.current) return;
+    if (queue.length === 0) {
+      idleMountDrainRef.current = false;
+      return;
+    }
     if (pauseDrainRef.current) return;
 
+    const becameIdle = wasRunningRef.current;
     const mountDrain = idleMountDrainRef.current;
     if (!becameIdle && !mountDrain) return;
+
+    // Consume the edge only once we commit to sending — never before the guards.
+    wasRunningRef.current = false;
     idleMountDrainRef.current = false;
 
-    let cancelled = false;
     drainingRef.current = true;
     const next = shift();
     if (!next) {
@@ -497,22 +556,16 @@ export function PromptInput({
       return;
     }
 
+    // Do not cancel/unshift on effect re-runs: shift() changes queue.length and
+    // would otherwise tear down this effect, drop the becameIdle edge, and stall.
     void (async () => {
-      // Yield so React Strict Mode cleanup can reclaim before we hit the network.
-      await Promise.resolve();
-      if (cancelled) {
-        unshift(next);
+      try {
+        const ok = await sendQueuedMessage(next, { putBackOnFail: true });
+        if (!ok) pauseDrainRef.current = true;
+      } finally {
         drainingRef.current = false;
-        return;
       }
-      const ok = await sendQueuedMessage(next, { putBackOnFail: true });
-      if (!ok) pauseDrainRef.current = true;
-      drainingRef.current = false;
     })();
-
-    return () => {
-      cancelled = true;
-    };
     // Intentionally keyed to run/idle + queue depth; send helpers close over latest.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, disabled, sending, queue.length]);
@@ -529,6 +582,9 @@ export function PromptInput({
       bytes,
     }));
     const logs = includeDevLogs;
+    if (draftKey.endsWith(":new")) {
+      pendingNewMigrationRef.current = true;
+    }
 
     // Agent busy (or kickoff in flight): always queue — never block typing.
     if (running || sendingRef.current) {
@@ -550,6 +606,7 @@ export function PromptInput({
       images: payloadImages.length ? payloadImages : undefined,
     });
     if (!ok) {
+      pendingNewMigrationRef.current = false;
       // Restore only if the user hasn't already started a follow-up.
       setPrompt((current) => current || text);
       setImages((current) =>

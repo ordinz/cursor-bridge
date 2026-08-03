@@ -4,6 +4,8 @@ import { checkCursorConnectivity } from "./cursor-health.js";
 import { buildPromptWithDevLogs } from "./dev-logs.js";
 import { createSseEvent } from "./sse-events.js";
 import { consumeRun } from "./stream.js";
+import { enqueueOrClaim } from "./prompt-queue.js";
+import { drainSessionQueue } from "./execute-prompt.js";
 import { VERSION } from "./version.js";
 import { createDraftStreamer } from "./telegram-draft.js";
 import {
@@ -259,6 +261,23 @@ async function runProjectPrompt(sessions, opts) {
   }
 
   if (detail && detail.runActive) {
+    const queued = enqueueOrClaim({
+      sessionId: detail.sessionId,
+      project,
+      prompt,
+      images: images || [],
+      includeDevLogs: prefs.includeDevLogs,
+      source: "telegram",
+      allowOverlap: false,
+    });
+    if (queued.mode === "queued" && queued.item) {
+      await reply(
+        messageThreadId,
+        `queued behind the active run (${detail.name || detail.sessionId}).\nqueue id: \`${queued.item.id.slice(0, 8)}…\``,
+        { replyMarkup: actionsKeyboard(detail, { busy: true }) },
+      );
+      return;
+    }
     await reply(
       messageThreadId,
       `session busy (${detail.name || detail.sessionId}). /stop then retry, or wait.`,
@@ -443,6 +462,7 @@ async function runProjectPrompt(sessions, opts) {
     }
     // Avoid re-mirroring the Telegram turn via IDE history poll.
     void catchUpAgentHistory(record.agentId, record.project);
+    void drainSessionQueue(sessions, id);
   }
 }
 

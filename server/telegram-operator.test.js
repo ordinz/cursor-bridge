@@ -1,19 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { requireRemoteApiKey } from "./remote-auth.js";
-import {
+import { useTempBridgeDb } from "./test-db.js";
+
+useTempBridgeDb();
+
+const { requireRemoteApiKey } = await import("./remote-auth.js");
+const {
   getTelegramTopicMap,
   resolveWebhookPublicUrl,
-} from "./telegram.js";
-import { createDraftStreamer } from "./telegram-draft.js";
-import {
+} = await import("./telegram.js");
+const { createDraftStreamer } = await import("./telegram-draft.js");
+const {
   getPhoneModeState,
   isPhoneModeOn,
   setPhoneMode,
-} from "./telegram-phone.js";
-import { createTelegramWebhookHandler } from "./telegram-operator.js";
-import { SessionManager } from "./sessions.js";
+} = await import("./telegram-phone.js");
+const { createTelegramWebhookHandler } = await import("./telegram-operator.js");
+const { SessionManager } = await import("./sessions.js");
 
 const savedMcpKey = process.env.MCP_API_KEY;
 const savedBridgeKey = process.env.BRIDGE_API_KEY;
@@ -101,6 +105,7 @@ test("getTelegramTopicMap parses topic env ids", () => {
 });
 
 test("phone mode persists toggle", () => {
+  useTempBridgeDb();
   const before = getPhoneModeState().phoneMode;
   setPhoneMode(true);
   assert.equal(isPhoneModeOn(), true);
@@ -118,6 +123,7 @@ test("createDraftStreamer accumulates text until finalize", async () => {
 });
 
 test("webhook rejects bad secret and accepts valid secret", async () => {
+  useTempBridgeDb();
   const prev = {
     token: process.env.TELEGRAM_BOT_TOKEN,
     chat: process.env.TELEGRAM_CHAT_ID,

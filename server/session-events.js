@@ -1,6 +1,5 @@
 import { writeSse } from "./stream.js";
-
-const BUFFER_MAX = 500;
+import { appendEvent, listEventsAfter } from "./db.js";
 
 function sendWs(ws, event) {
   if (ws.readyState !== 1 /* WebSocket.OPEN */) return;
@@ -17,15 +16,14 @@ export class SessionEventHub {
     this.subscribers = new Map();
     /** @type {Map<string, Set<import("ws").WebSocket>>} */
     this.wsSubscribers = new Map();
-    /** @type {Map<string, object[]>} */
-    this.buffers = new Map();
-    /** @type {Map<string, number>} */
-    this.nextSeq = new Map();
   }
 
-  /** Clear replay buffer at the start of a new run. */
-  startRun(sessionId) {
-    this.buffers.set(sessionId, []);
+  /**
+   * Hook retained for API compatibility. Event log is durable across runs;
+   * no longer clears history.
+   */
+  startRun(_sessionId) {
+    /* durable events — intentionally no-op */
   }
 
   /**
@@ -33,20 +31,7 @@ export class SessionEventHub {
    * @param {object} event
    */
   record(sessionId, event) {
-    const seq = (this.nextSeq.get(sessionId) ?? 0) + 1;
-    this.nextSeq.set(sessionId, seq);
-    const stamped = { ...event, seq };
-
-    let buffer = this.buffers.get(sessionId);
-    if (!buffer) {
-      buffer = [];
-      this.buffers.set(sessionId, buffer);
-    }
-    buffer.push(stamped);
-    if (buffer.length > BUFFER_MAX) {
-      buffer.splice(0, buffer.length - BUFFER_MAX);
-    }
-    return stamped;
+    return appendEvent(sessionId, event);
   }
 
   /**
@@ -89,8 +74,7 @@ export class SessionEventHub {
     this.subscribers.get(sessionId).add(res);
 
     if (replay) {
-      for (const event of this.buffers.get(sessionId) ?? []) {
-        if ((event.seq ?? 0) <= afterSeq) continue;
+      for (const event of listEventsAfter(sessionId, afterSeq)) {
         if (!res.writableEnded) {
           writeSse(res, event);
         }
@@ -118,8 +102,7 @@ export class SessionEventHub {
     this.wsSubscribers.get(sessionId).add(ws);
 
     if (replay) {
-      for (const event of this.buffers.get(sessionId) ?? []) {
-        if ((event.seq ?? 0) <= afterSeq) continue;
+      for (const event of listEventsAfter(sessionId, afterSeq)) {
         sendWs(ws, event);
       }
     }
@@ -155,7 +138,5 @@ export class SessionEventHub {
       }
     }
     this.wsSubscribers.delete(sessionId);
-    this.buffers.delete(sessionId);
-    this.nextSeq.delete(sessionId);
   }
 }

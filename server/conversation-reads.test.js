@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, it, before, beforeEach } from "node:test";
+import { useTempBridgeDb, resetTempBridgeDb } from "./test-db.js";
 
-const tmpFile = path.join(
-  os.tmpdir(),
-  `cursor-bridge-conversation-reads-${process.pid}.json`,
-);
-process.env.CONVERSATION_READS_FILE = tmpFile;
+useTempBridgeDb();
 
 const {
   _resetConversationReadsForTests,
@@ -22,14 +16,11 @@ const {
 
 describe("conversation-reads", () => {
   before(() => {
-    try {
-      fs.unlinkSync(tmpFile);
-    } catch {
-      // ignore
-    }
+    useTempBridgeDb();
   });
 
   beforeEach(() => {
+    resetTempBridgeDb();
     _resetConversationReadsForTests({ byKey: {} });
   });
 

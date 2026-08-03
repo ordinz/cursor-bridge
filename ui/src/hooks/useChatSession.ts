@@ -110,49 +110,73 @@ function isAbortError(err: unknown): boolean {
  * rather than leaving the composer locked forever. */
 const STREAM_IDLE_TIMEOUT_MS = 45_000;
 
-function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
-  const next = [...items];
+/** Strip embedded data-URL images so optimistic vs SSE user text can match. */
+function plainUserText(text: string): string {
+  return text
+    .replace(
+      /!\[[^\]]*\]\(data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+\)/g,
+      "",
+    )
+    .replace(
+      /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]{32,}/g,
+      "",
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
+function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
   switch (event.type) {
     case "user": {
-      // Optimistic send paints the user bubble before status events arrive.
-      // Skip matching user text even if status/tool rows landed after it.
+      // Optimistic send paints the user bubble (often with local data-URLs)
+      // before status events arrive. SSE must not re-add or replace with a
+      // text-only copy — compare plain text, and prefer the richer bubble.
       let dup = false;
-      for (let i = next.length - 1; i >= 0; i--) {
-        const item = next[i];
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i];
         if (item.kind === "user") {
-          dup = item.text === event.text;
+          const samePlain =
+            plainUserText(item.text) === plainUserText(event.text);
+          const imageAck =
+            typeof event.imageCount === "number" &&
+            event.imageCount > 0 &&
+            (item.text.includes("data:image") ||
+              plainUserText(item.text) === plainUserText(event.text));
+          dup = samePlain || imageAck;
           break;
         }
         if (item.kind !== "status") break;
       }
-      if (dup) break;
-      next.push({
-        id: nextId(),
-        kind: "user",
-        text: event.text,
-        source:
-          event.source === "manual" ||
-          event.source === "api" ||
-          event.source === "history"
-            ? event.source
-            : undefined,
-      });
-      break;
+      if (dup) return items;
+      return [
+        ...items,
+        {
+          id: nextId(),
+          kind: "user",
+          text: event.text,
+          source:
+            event.source === "manual" ||
+            event.source === "api" ||
+            event.source === "history"
+              ? event.source
+              : undefined,
+        },
+      ];
     }
     case "assistant": {
-      const last = next[next.length - 1];
+      const last = items[items.length - 1];
       if (last?.kind === "assistant") {
+        const next = items.slice();
         next[next.length - 1] = {
           ...last,
           text: last.text + event.text,
         };
-      } else {
-        next.push({ id: nextId(), kind: "assistant", text: event.text });
+        return next;
       }
-      break;
+      return [...items, { id: nextId(), kind: "assistant", text: event.text }];
     }
     case "tool_call": {
+      const next = items.slice();
       const callId = event.callId ?? nextId();
       const idx = next.findIndex(
         (i) => i.kind === "tool" && i.callId === callId,
@@ -170,9 +194,10 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
       } else {
         next.push(toolItem);
       }
-      break;
+      return next;
     }
     case "tool_result": {
+      const next = items.slice();
       const callId = event.callId ?? nextId();
       const idx = next.findIndex(
         (i) => i.kind === "tool" && i.callId === callId,
@@ -190,34 +215,45 @@ function applyEvent(items: FeedItem[], event: SseEvent): FeedItem[] {
       } else {
         next.push(toolItem);
       }
-      break;
+      return next;
     }
     case "status": {
-      const last = next[next.length - 1];
-      // SSE + WS can both deliver the same run-started status before seq lands.
+      // Ephemeral run lifecycle — the live "Working…" marker covers this.
+      // Persisting RUNNING rows leaves spinners after the run finishes.
+      if (
+        event.status === "RUNNING" ||
+        event.status === "running" ||
+        /^run started/i.test(event.message ?? "")
+      ) {
+        return items;
+      }
+      const last = items[items.length - 1];
       if (
         last?.kind === "status" &&
         last.status === event.status &&
         (last.message ?? "") === (event.message ?? "")
       ) {
-        break;
+        return items;
       }
-      next.push({
-        id: nextId(),
-        kind: "status",
-        status: event.status,
-        message: event.message,
-      });
-      break;
+      return [
+        ...items,
+        {
+          id: nextId(),
+          kind: "status",
+          status: event.status,
+          message: event.message,
+        },
+      ];
     }
     case "error":
-      next.push({ id: nextId(), kind: "error", message: event.message });
-      break;
+      return [
+        ...items,
+        { id: nextId(), kind: "error", message: event.message },
+      ];
     default:
-      break;
+      // thinking / system / unknown — do not allocate a new feed array
+      return items;
   }
-
-  return next;
 }
 
 function applyWatchEvent(
@@ -264,6 +300,18 @@ function applyWatchEvent(
           }
         : prev,
     );
+    // Drop any RUNNING markers that slipped into the feed before we filtered them.
+    setFeed((items) =>
+      items.filter(
+        (i) =>
+          !(
+            i.kind === "status" &&
+            (i.status === "RUNNING" ||
+              i.status === "running" ||
+              /^run started/i.test(i.message ?? ""))
+          ),
+      ),
+    );
     return;
   }
 
@@ -273,6 +321,19 @@ function applyWatchEvent(
     setSession((prev) =>
       prev ? { ...prev, runStatus: "error", runActive: false } : prev,
     );
+    setFeed((items) => {
+      const cleared = items.filter(
+        (i) =>
+          !(
+            i.kind === "status" &&
+            (i.status === "RUNNING" ||
+              i.status === "running" ||
+              /^run started/i.test(i.message ?? ""))
+          ),
+      );
+      return applyEvent(cleared, event);
+    });
+    return;
   }
 
   setFeed((items) => applyEvent(items, event));
@@ -430,6 +491,16 @@ export function useChatSession() {
   }, []);
 
   const ingestEvent = useCallback((event: SseEvent) => {
+    // Ignore types we never render — still advance seq so resume stays correct.
+    if (event.type === "thinking" || event.type === "system") {
+      if (
+        typeof event.seq === "number" &&
+        event.seq > eventSeqRef.current
+      ) {
+        eventSeqRef.current = event.seq;
+      }
+      return;
+    }
     if (!shouldAcceptSeq(event, eventSeqRef)) return;
     applyWatchEvent(event, setFeed, setSession, setRunStatus, setError);
   }, []);

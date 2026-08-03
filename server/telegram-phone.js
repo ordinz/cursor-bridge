@@ -1,42 +1,19 @@
-import fs from "fs";
-import os from "os";
-import path from "path";
+import { kvGet, kvSet } from "./db.js";
 
-const STATE_DIR = path.join(os.homedir(), ".cursor-bridge");
-const STATE_FILE = path.join(STATE_DIR, "telegram-phone.json");
-
-/** @type {{ phoneMode: boolean } | null} */
-let cached = null;
+const KV_KEY = "telegram-phone";
 
 function defaultState() {
   return { phoneMode: false };
 }
 
 function readState() {
-  if (cached) return cached;
-  try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    cached = {
-      phoneMode: Boolean(parsed?.phoneMode),
-    };
-  } catch {
-    cached = defaultState();
-  }
-  return cached;
+  const parsed = kvGet(KV_KEY, null);
+  if (!parsed || typeof parsed !== "object") return defaultState();
+  return { phoneMode: Boolean(parsed.phoneMode) };
 }
 
 function writeState(next) {
-  cached = next;
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  } catch (err) {
-    console.warn(
-      "[telegram] failed to persist phone mode:",
-      err instanceof Error ? err.message : err,
-    );
-  }
+  kvSet(KV_KEY, next);
 }
 
 export function isPhoneModeOn() {

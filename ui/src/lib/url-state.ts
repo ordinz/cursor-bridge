@@ -13,7 +13,10 @@ export const consoleUrlParsers = {
   /** Cursor agent / conversation id (omit when starting a fresh chat). */
   agent: parseAsString,
   model: parseAsString,
-  tab: parseAsStringLiteral(MOBILE_PANELS).withDefault("feed"),
+  // Keep ?tab= in the URL even for the default (feed) so reloads restore the panel.
+  tab: parseAsStringLiteral(MOBILE_PANELS)
+    .withDefault("feed")
+    .withOptions({ clearOnDefault: false }),
 };
 
 export const serializeConsoleUrl = createSerializer(consoleUrlParsers);

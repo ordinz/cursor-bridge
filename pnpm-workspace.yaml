@@ -4,4 +4,5 @@ packages:
 
 onlyBuiltDependencies:
   - sqlite3
+  - better-sqlite3
   - "@cursor/sdk-darwin-arm64"

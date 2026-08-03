@@ -15,6 +15,15 @@ import {
   bumpConversationSort,
   markConversationCompleted,
 } from "./conversation-reads.js";
+import {
+  getOpenSessionByAgentId,
+  getSessionRow,
+  listOpenSessionRows,
+  markSessionClosed,
+  openBridgeDb,
+  persistSessionRecord,
+  sessionRowToPublic,
+} from "./db.js";
 
 const IDLE_TIMEOUT_MS = Number(process.env.SESSION_IDLE_MS ?? 30 * 60 * 1000);
 const SNIPPET_MAX = 160;
@@ -24,6 +33,23 @@ export class SessionManager {
     /** @type {Map<string, SessionRecord>} */
     this.sessions = new Map();
     this.events = new SessionEventHub();
+    openBridgeDb();
+    this.hydrateFromDb();
+  }
+
+  /** Load open session rows into memory (without live Agent handles). */
+  hydrateFromDb() {
+    for (const row of listOpenSessionRows()) {
+      if (this.sessions.has(row.session_id)) continue;
+      // Reset stale running flags from a previous process.
+      const runStatus =
+        row.run_status === "running" ? "idle" : row.run_status;
+      this.sessions.set(row.session_id, recordFromDbRow({ ...row, run_status: runStatus }));
+      if (row.run_status === "running") {
+        persistSessionRecord(this.sessions.get(row.session_id));
+      }
+      this.scheduleIdleCleanup(row.session_id);
+    }
   }
 
   /** @param {object} event @param {import("express").Response} [chatRes] */
@@ -44,13 +70,16 @@ export class SessionManager {
   }
 
   list() {
-    return [...this.sessions.values()].map(toPublicSession);
+    return [...this.sessions.values()]
+      .filter((r) => !r.closedAt)
+      .map(toPublicSession);
   }
 
-  /** Latest in-memory session for a project, or null. */
+  /** Latest open session for a project, or null. */
   findLatestForProject(project) {
     let best = null;
     for (const record of this.sessions.values()) {
+      if (record.closedAt) continue;
       if (record.project !== project) continue;
       if (!best || record.lastActivityAt > best.lastActivityAt) {
         best = record;
@@ -70,14 +99,14 @@ export class SessionManager {
 
   getDetail(sessionId) {
     const record = this.get(sessionId);
-    if (!record) return null;
+    if (!record || record.closedAt) return null;
     return toSessionDetail(record);
   }
 
   /** @throws {SessionNotFoundError} */
   require(sessionId) {
     const record = this.get(sessionId);
-    if (!record) {
+    if (!record || record.closedAt) {
       throw new SessionNotFoundError(sessionId);
     }
     return record;
@@ -96,10 +125,45 @@ export class SessionManager {
     return count;
   }
 
+  /** Persist current record fields to SQLite. */
+  persist(sessionId) {
+    const record = this.get(sessionId);
+    if (!record) return;
+    persistSessionRecord(record, {
+      closedAt: record.closedAt ?? null,
+    });
+  }
+
+  /**
+   * Ensure a live Agent handle exists (hydrate from DB / resume if needed).
+   * @throws {SessionNotFoundError}
+   */
+  async ensureLiveAgent(sessionId) {
+    const record = this.require(sessionId);
+    if (record.agent) return record;
+
+    try {
+      await ensureAgentUnarchived(record.agentId, record.cwd);
+    } catch {
+      /* send still recovers */
+    }
+
+    const agent = await Agent.resume(record.agentId, {
+      apiKey: process.env.CURSOR_API_KEY,
+      model: { id: record.model },
+      mode: record.mode === "plan" ? "plan" : "agent",
+      local: { cwd: record.cwd },
+    });
+    record.agent = agent;
+    record.agentId = agent.agentId;
+    this.persist(sessionId);
+    return record;
+  }
+
   /** @throws {SessionNotFoundError | SessionBusyError} */
   assertCanChat(sessionId) {
     const record = this.get(sessionId);
-    if (!record) {
+    if (!record || record.closedAt) {
       throw new SessionNotFoundError(sessionId);
     }
     if (record.runStatus === "running") {
@@ -144,9 +208,11 @@ export class SessionManager {
       listActivityAt: now,
       lastPrompt: null,
       lastAssistantSnippet: null,
+      closedAt: null,
     };
 
     this.sessions.set(sessionId, record);
+    this.persist(sessionId);
     bumpConversationSort(project, agent.agentId, now);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
@@ -158,19 +224,67 @@ export class SessionManager {
     record.telegramThreadId =
       threadId == null ? null : Number(threadId);
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   async resumeAgent({ agentId, project, model = "default", mode = "agent" }) {
     const cwd = resolveProject(project);
+    const agentMode = mode === "plan" ? "plan" : "agent";
+
+    // Reuse durable open session for this agent when present.
+    const existingRow = getOpenSessionByAgentId(agentId);
+    if (existingRow) {
+      let record = this.get(existingRow.session_id);
+      if (!record) {
+        record = recordFromDbRow(existingRow);
+        this.sessions.set(record.sessionId, record);
+      }
+      record.project = project;
+      record.cwd = cwd;
+      record.model = model;
+      record.mode = agentMode;
+      record.closedAt = null;
+      record.lastActivityAt = Date.now();
+
+      try {
+        await ensureAgentUnarchived(agentId, cwd);
+      } catch {
+        /* ignore */
+      }
+
+      const agent = await Agent.resume(agentId, {
+        apiKey: process.env.CURSOR_API_KEY,
+        model: { id: model },
+        mode: agentMode,
+        local: { cwd },
+      });
+      record.agent = agent;
+      record.agentId = agent.agentId;
+
+      const binding = getBindingByAgentId(agent.agentId);
+      if (binding?.threadId != null) {
+        record.telegramThreadId = binding.threadId;
+      }
+
+      const { name: storedName, namedFromPrompt } = await getLocalAgentMeta(
+        agentId,
+        project,
+      );
+      if (storedName) record.name = storedName;
+      if (namedFromPrompt) record.namedFromPrompt = true;
+
+      this.persist(record.sessionId);
+      this.scheduleIdleCleanup(record.sessionId);
+      return toSessionDetail(record);
+    }
+
     const sessionId = this.createId();
     const { name: storedName, namedFromPrompt } = await getLocalAgentMeta(
       agentId,
       project,
     );
     const now = Date.now();
-    const agentMode = mode === "plan" ? "plan" : "agent";
 
-    // Opening an archived chat means continue it — bring it back to the active list.
     try {
       await ensureAgentUnarchived(agentId, cwd);
     } catch {
@@ -206,9 +320,11 @@ export class SessionManager {
       listActivityAt: 0,
       lastPrompt: null,
       lastAssistantSnippet: null,
+      closedAt: null,
     };
 
     this.sessions.set(sessionId, record);
+    this.persist(sessionId);
     this.scheduleIdleCleanup(sessionId);
     return toSessionDetail(record);
   }
@@ -219,6 +335,7 @@ export class SessionManager {
     if (!record || typeof model !== "string" || !model.trim()) return;
     record.model = model.trim();
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   /** @param {string} sessionId @param {"agent"|"plan"} mode */
@@ -227,6 +344,7 @@ export class SessionManager {
     if (!record) return;
     record.mode = mode === "plan" ? "plan" : "agent";
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   setInterimName(sessionId, name) {
@@ -234,6 +352,7 @@ export class SessionManager {
     if (!record || record.namedFromPrompt) return;
     record.name = name;
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   scheduleNaming(sessionId) {
@@ -251,6 +370,7 @@ export class SessionManager {
     record.name = name;
     record.namedFromPrompt = true;
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   notePrompt(sessionId, prompt) {
@@ -261,6 +381,7 @@ export class SessionManager {
     record.lastAssistantSnippet = null;
     record.lastActivityAt = now;
     record.listActivityAt = now;
+    this.persist(sessionId);
     bumpConversationSort(record.project, record.agentId, now);
   }
 
@@ -274,6 +395,7 @@ export class SessionManager {
         : combined;
     // Keep idle timeout alive, but do not reshuffle Recent ordering.
     record.lastActivityAt = Date.now();
+    this.persist(sessionId);
   }
 
   setActiveRun(sessionId, run, abortController = null) {
@@ -285,6 +407,7 @@ export class SessionManager {
     record.runStatus = "running";
     record.lastActivityAt = now;
     record.listActivityAt = now;
+    this.persist(sessionId);
     bumpConversationSort(record.project, record.agentId, now);
   }
 
@@ -297,6 +420,7 @@ export class SessionManager {
     record.runStatus = status;
     record.lastActivityAt = now;
     record.listActivityAt = now;
+    this.persist(sessionId);
     if (status === "idle" || status === "finished" || status === "error") {
       markConversationCompleted(record.project, record.agentId, now);
     } else {
@@ -308,6 +432,7 @@ export class SessionManager {
     const record = this.get(sessionId);
     if (record) {
       record.lastActivityAt = Date.now();
+      this.persist(sessionId);
     }
   }
 
@@ -331,7 +456,14 @@ export class SessionManager {
 
   async close(sessionId) {
     const record = this.get(sessionId);
-    if (!record) return false;
+    if (!record) {
+      // Already gone from memory — still mark DB closed if present.
+      const row = getSessionRow(sessionId);
+      if (row && row.closed_at == null) {
+        markSessionClosed(sessionId);
+      }
+      return Boolean(row);
+    }
 
     if (record.activeRun?.supports("cancel")) {
       try {
@@ -341,20 +473,38 @@ export class SessionManager {
       }
     }
 
-    record.agent.close();
+    try {
+      record.agent?.close();
+    } catch {
+      /* ignore */
+    }
+
+    const now = Date.now();
+    record.closedAt = now;
+    record.activeRun = null;
+    record.abortController = null;
+    if (record.runStatus === "running") {
+      record.runStatus = "idle";
+    }
+    markSessionClosed(sessionId, now);
     this.sessions.delete(sessionId);
     this.events.removeSession(sessionId);
     return true;
   }
 
+  /**
+   * Close every open session for this agent (archive/delete can leave
+   * duplicates after resume races).
+   * @returns {Promise<string[]>} closed session ids
+   */
   async closeByAgentId(agentId) {
-    for (const [sessionId, record] of this.sessions) {
-      if (record.agentId === agentId) {
-        await this.close(sessionId);
-        return sessionId;
-      }
+    const ids = [...this.sessions.values()]
+      .filter((r) => r.agentId === agentId && !r.closedAt)
+      .map((r) => r.sessionId);
+    for (const sessionId of ids) {
+      await this.close(sessionId);
     }
-    return null;
+    return ids;
   }
 
   scheduleIdleCleanup(sessionId) {
@@ -368,6 +518,35 @@ export class SessionManager {
       }
     }, IDLE_TIMEOUT_MS);
   }
+}
+
+/**
+ * @param {object} row DB sessions row
+ */
+function recordFromDbRow(row) {
+  const pub = sessionRowToPublic(row);
+  return {
+    sessionId: pub.sessionId,
+    agent: null,
+    agentId: pub.agentId,
+    project: pub.project,
+    cwd: pub.cwd,
+    model: pub.model,
+    mode: pub.mode,
+    name: pub.name,
+    namedFromPrompt: pub.namedFromPrompt,
+    namingScheduled: false,
+    telegramThreadId: pub.telegramThreadId,
+    activeRun: null,
+    abortController: null,
+    runStatus: pub.runStatus === "running" ? "idle" : pub.runStatus,
+    createdAt: pub.createdAt,
+    lastActivityAt: pub.lastActivityAt,
+    listActivityAt: pub.listActivityAt,
+    lastPrompt: pub.lastPrompt,
+    lastAssistantSnippet: pub.lastAssistantSnippet,
+    closedAt: pub.closedAt,
+  };
 }
 
 function toPublicSession(record) {
@@ -387,7 +566,7 @@ function toPublicSession(record) {
     telegramThreadId,
     telegramTopicUrl: telegramTopicUrlForSession(withThread),
     runStatus: record.runStatus,
-    runActive: Boolean(record.activeRun),
+    runActive: Boolean(record.activeRun) || record.runStatus === "running",
     createdAt: record.createdAt,
     lastActivityAt: record.lastActivityAt,
     listActivityAt: record.listActivityAt || 0,

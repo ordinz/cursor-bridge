@@ -11,8 +11,11 @@ import {
   withTestServer,
 } from "./test-http.js";
 import { validatePrompt, validateProjectId } from "./validate.js";
-import { SessionManager } from "./sessions.js";
 import { NoActiveRunError } from "./errors.js";
+import { useTempBridgeDb } from "./test-db.js";
+
+useTempBridgeDb();
+const { SessionManager } = await import("./sessions.js");
 
 function createMockRes() {
   const chunks = [];
@@ -91,7 +94,7 @@ test("validateProjectId rejects path traversal", () => {
   assert.throws(() => validateProjectId("foo/bar"), /unknown project/);
 });
 
-test("SESSION_BUSY returns 409 JSON", async () => {
+test("busy session queues chat with 202", async () => {
   await withTestServer(async ({ sessions, base }) => {
     const id = seedRunningSession(sessions);
     const res = await fetch(`${base}/sessions/${id}/chat`, {
@@ -99,9 +102,11 @@ test("SESSION_BUSY returns 409 JSON", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: "hello" }),
     });
-    assert.equal(res.status, 409);
+    assert.equal(res.status, 202);
     const body = await res.json();
-    assert.equal(body.code, "SESSION_BUSY");
+    assert.equal(body.queued, true);
+    assert.ok(body.item?.id);
+    assert.equal(body.item.status, "queued");
   });
 });
 
@@ -130,6 +135,7 @@ test("cancel on idle session returns 409 NO_ACTIVE_RUN", async () => {
 });
 
 test("cancel on active run updates session status", async () => {
+  useTempBridgeDb();
   const sessions = new SessionManager();
   const id = seedRunningSession(sessions);
   const result = await sessions.cancel(id);
@@ -140,6 +146,7 @@ test("cancel on active run updates session status", async () => {
 });
 
 test("cancel idle session throws NoActiveRunError", async () => {
+  useTempBridgeDb();
   const sessions = new SessionManager();
   const id = seedIdleSession(sessions);
   await assert.rejects(() => sessions.cancel(id), NoActiveRunError);
@@ -418,7 +425,8 @@ test("chat with images sends SDK image payload, not base64-in-prompt", async () 
 
     const userEvent = events.find((e) => e.type === "user");
     assert.equal(userEvent.imageCount, 1);
-    assert.match(userEvent.text, /!\[big\.jpg\]\(data:image\/jpeg;base64,/);
+    assert.equal(userEvent.text, "what is this?");
+    assert.ok(!String(userEvent.text).includes("base64"));
     assert.ok(!events.some((e) => e.type === "error"));
   });
 });

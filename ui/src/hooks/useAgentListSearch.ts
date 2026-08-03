@@ -1,33 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SEARCH_DEEPER_MAX_PAGES } from "../lib/agent-list";
 
 /**
- * Client-filter a list; when the query matches nothing locally but the
- * server still has pages, keep loading until a match appears or pages run out.
+ * Client-filter a list; when the query matches nothing locally, kick a
+ * one-shot deeper server search (provided by the caller).
  */
 export function useAgentListSearch<T>(options: {
   agents: T[];
   query: string;
   match: (agent: T, query: string) => boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  loadMore: () => Promise<void>;
+  searchServer?: (query: string) => Promise<void>;
+  searchingServer?: boolean;
 }) {
-  const { agents, query, match, hasMore, loadingMore, loadMore } = options;
+  const { agents, query, match, searchServer, searchingServer = false } =
+    options;
   const trimmed = query.trim();
-  const pagesTriedRef = useRef(0);
-  const kickRef = useRef(false);
-  const [, setPagesTried] = useState(0);
+  const searchedForRef = useRef<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    pagesTriedRef.current = 0;
-    kickRef.current = false;
-    setPagesTried(0);
+    searchedForRef.current = null;
+    setPending(false);
   }, [trimmed]);
-
-  useEffect(() => {
-    if (!loadingMore) kickRef.current = false;
-  }, [loadingMore]);
 
   const filtered = useMemo(() => {
     if (!trimmed) return agents;
@@ -35,23 +28,30 @@ export function useAgentListSearch<T>(options: {
   }, [agents, match, trimmed]);
 
   useEffect(() => {
-    if (!trimmed) return;
+    if (!trimmed || !searchServer) return;
     if (filtered.length > 0) return;
-    if (!hasMore || loadingMore || kickRef.current) return;
-    if (pagesTriedRef.current >= SEARCH_DEEPER_MAX_PAGES) return;
+    if (searchedForRef.current === trimmed) return;
 
-    kickRef.current = true;
-    pagesTriedRef.current += 1;
-    setPagesTried(pagesTriedRef.current);
-    void loadMore();
-  }, [trimmed, filtered.length, hasMore, loadingMore, loadMore]);
+    let cancelled = false;
+    searchedForRef.current = trimmed;
+    setPending(true);
+    void (async () => {
+      try {
+        await searchServer(trimmed);
+      } finally {
+        if (!cancelled) setPending(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trimmed, filtered.length, searchServer]);
 
   const searchingDeeper =
     Boolean(trimmed) &&
     filtered.length === 0 &&
-    (loadingMore ||
-      kickRef.current ||
-      (hasMore && pagesTriedRef.current < SEARCH_DEEPER_MAX_PAGES));
+    (pending || searchingServer);
 
   return { filtered, searchingDeeper };
 }

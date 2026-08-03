@@ -34,7 +34,7 @@ test("uiSessionUrl encodes project and agent", () => {
   });
   assert.equal(
     url,
-    "https://ordins-cursor-bridge.kairose.com/?project=cursor-bridge&agent=agent-abc",
+    "https://ordins-cursor-bridge.kairose.com/?project=cursor-bridge&agent=agent-abc&tab=feed",
   );
   assert.equal(uiSessionUrl({ project: "app" }), null);
 });

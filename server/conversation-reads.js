@@ -1,12 +1,9 @@
-import fs from "fs";
-import os from "os";
-import path from "path";
-
-const STATE_DIR = path.join(os.homedir(), ".cursor-bridge");
-const STATE_FILE = path.resolve(
-  process.env.CONVERSATION_READS_FILE ||
-    path.join(STATE_DIR, "conversation-reads.json"),
-);
+import {
+  deleteConversationRead,
+  getConversationReadRow,
+  listConversationReadRows,
+  upsertConversationRead,
+} from "./db.js";
 
 /**
  * @typedef {{
@@ -15,9 +12,6 @@ const STATE_FILE = path.resolve(
  *   lastSortAt: number,
  * }} ConversationReadEntry
  */
-
-/** @type {{ byKey: Record<string, ConversationReadEntry> } | null} */
-let cached = null;
 
 function conversationKey(project, agentId) {
   return `${String(project)}:${String(agentId)}`;
@@ -47,51 +41,18 @@ function normalizeEntry(raw) {
   };
 }
 
-function defaultState() {
-  return { byKey: {} };
-}
-
-function readState() {
-  if (cached) return cached;
-  try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    const byKey = {};
-    if (parsed?.byKey && typeof parsed.byKey === "object") {
-      for (const [key, value] of Object.entries(parsed.byKey)) {
-        byKey[key] = normalizeEntry(value);
-      }
-    }
-    cached = { byKey };
-  } catch {
-    cached = defaultState();
-  }
-  return cached;
-}
-
-function writeState(next) {
-  cached = next;
-  try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  } catch (err) {
-    console.warn(
-      "[conversation-reads] failed to persist:",
-      err instanceof Error ? err.message : err,
-    );
-  }
-}
-
-function touchEntry(project, agentId) {
-  const state = readState();
-  const key = conversationKey(project, agentId);
-  const cur = state.byKey[key] ? { ...state.byKey[key] } : emptyEntry();
-  return { state, key, cur };
+function entryFromRow(row) {
+  if (!row) return emptyEntry();
+  return normalizeEntry({
+    lastReadAt: row.last_read_at,
+    lastCompletedAt: row.last_completed_at,
+    lastSortAt: row.last_sort_at,
+  });
 }
 
 /** @returns {Record<string, ConversationReadEntry>} */
 export function listConversationReads() {
-  return { ...readState().byKey };
+  return listConversationReadRows();
 }
 
 /**
@@ -101,7 +62,7 @@ export function listConversationReads() {
  */
 export function getConversationRead(project, agentId) {
   const key = conversationKey(project, agentId);
-  return normalizeEntry(readState().byKey[key]);
+  return entryFromRow(getConversationReadRow(key));
 }
 
 /**
@@ -111,12 +72,11 @@ export function getConversationRead(project, agentId) {
  */
 export function markConversationRead(project, agentId) {
   if (!project || !agentId) return getConversationRead(project, agentId);
-  const { state, key, cur } = touchEntry(project, agentId);
+  const key = conversationKey(project, agentId);
+  const cur = entryFromRow(getConversationReadRow(key));
   const now = Date.now();
   cur.lastReadAt = Math.max(cur.lastReadAt, now);
-  state.byKey[key] = cur;
-  writeState({ byKey: { ...state.byKey } });
-  return { ...cur };
+  return upsertConversationRead(key, project, agentId, cur);
 }
 
 /**
@@ -127,13 +87,12 @@ export function markConversationRead(project, agentId) {
  */
 export function markConversationCompleted(project, agentId, at = Date.now()) {
   if (!project || !agentId) return getConversationRead(project, agentId);
-  const { state, key, cur } = touchEntry(project, agentId);
+  const key = conversationKey(project, agentId);
+  const cur = entryFromRow(getConversationReadRow(key));
   const ts = Number.isFinite(at) ? at : Date.now();
   cur.lastCompletedAt = Math.max(cur.lastCompletedAt, ts);
   cur.lastSortAt = Math.max(cur.lastSortAt, ts);
-  state.byKey[key] = cur;
-  writeState({ byKey: { ...state.byKey } });
-  return { ...cur };
+  return upsertConversationRead(key, project, agentId, cur);
 }
 
 /**
@@ -144,12 +103,11 @@ export function markConversationCompleted(project, agentId, at = Date.now()) {
  */
 export function bumpConversationSort(project, agentId, at = Date.now()) {
   if (!project || !agentId) return getConversationRead(project, agentId);
-  const { state, key, cur } = touchEntry(project, agentId);
+  const key = conversationKey(project, agentId);
+  const cur = entryFromRow(getConversationReadRow(key));
   const ts = Number.isFinite(at) ? at : Date.now();
   cur.lastSortAt = Math.max(cur.lastSortAt, ts);
-  state.byKey[key] = cur;
-  writeState({ byKey: { ...state.byKey } });
-  return { ...cur };
+  return upsertConversationRead(key, project, agentId, cur);
 }
 
 /**
@@ -158,26 +116,24 @@ export function bumpConversationSort(project, agentId, at = Date.now()) {
  */
 export function removeConversationRead(project, agentId) {
   if (!project || !agentId) return;
-  const state = readState();
-  const key = conversationKey(project, agentId);
-  if (!(key in state.byKey)) return;
-  const next = { ...state.byKey };
-  delete next[key];
-  writeState({ byKey: next });
+  deleteConversationRead(conversationKey(project, agentId));
 }
 
 /** Test helper */
 export function _resetConversationReadsForTests(state = null) {
-  cached = state
-    ? {
-        byKey: Object.fromEntries(
-          Object.entries(state.byKey || {}).map(([k, v]) => [
-            k,
-            normalizeEntry(v),
-          ]),
-        ),
-      }
-    : null;
+  // Clear via delete of known keys or replace from provided state.
+  const current = listConversationReadRows();
+  for (const key of Object.keys(current)) {
+    deleteConversationRead(key);
+  }
+  if (!state?.byKey) return;
+  for (const [key, value] of Object.entries(state.byKey)) {
+    const colon = key.indexOf(":");
+    const project = colon >= 0 ? key.slice(0, colon) : "";
+    const agentId = colon >= 0 ? key.slice(colon + 1) : key;
+    upsertConversationRead(key, project, agentId, normalizeEntry(value));
+  }
 }
 
-export { conversationKey, STATE_FILE as CONVERSATION_READS_FILE };
+export { conversationKey };
+export const CONVERSATION_READS_FILE = "(sqlite:conversation_reads)";

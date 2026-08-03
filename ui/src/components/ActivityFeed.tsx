@@ -28,6 +28,12 @@ import {
 } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
+  Marker,
+  MarkerContent,
+  MarkerIcon,
+} from "@/components/ui/marker";
+import { Spinner } from "@/components/ui/spinner";
+import {
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
@@ -297,23 +303,26 @@ function FeedEntry({
           </BubbleContent>
         </Bubble>
       );
-    case "status":
+    case "status": {
+      const finished =
+        item.status === "FINISHED" ||
+        item.status === "finished" ||
+        /^finished$/i.test(item.status);
+      const label = item.message?.trim() || item.status;
       return (
-        <Bubble
-          variant="ghost"
-          align="start"
-          data-component="FeedStatusBubble"
+        <Marker
+          data-component="FeedStatusMarker"
           data-item="FeedStatus"
           data-testid="feed-status"
           data-feed-id={item.id}
           data-state={item.status}
         >
-          <BubbleContent className="px-0 py-0 text-xs text-zinc-500">
-            Status: {item.status}
-            {item.message ? ` — ${item.message}` : ""}
-          </BubbleContent>
-        </Bubble>
+          <MarkerContent className={finished ? "text-zinc-500" : undefined}>
+            {label}
+          </MarkerContent>
+        </Marker>
       );
+    }
     case "error":
       return (
         <Bubble
@@ -358,10 +367,19 @@ export function ActivityFeed({
     [items],
   );
 
-  const visibleItems = useMemo(
-    () => (showTools ? items : items.filter((i) => i.kind !== "tool")),
-    [items, showTools],
-  );
+  const visibleItems = useMemo(() => {
+    const base = showTools ? items : items.filter((i) => i.kind !== "tool");
+    // RUNNING / "Run started" are ephemeral — live footer shows Working….
+    return base.filter(
+      (i) =>
+        !(
+          i.kind === "status" &&
+          (i.status === "RUNNING" ||
+            i.status === "running" ||
+            /^run started/i.test(i.message ?? ""))
+        ),
+    );
+  }, [items, showTools]);
 
   const isEmpty = items.length === 0;
 
@@ -444,16 +462,19 @@ export function ActivityFeed({
               ))}
               {running ? (
                 <MessageScrollerItem messageId="feed-running">
-                  <Bubble
-                    variant="ghost"
-                    align="start"
+                  <Marker
+                    role="status"
                     data-testid="feed-running"
                     data-state="running"
+                    data-component="FeedRunningMarker"
                   >
-                    <BubbleContent className="px-0 py-0 text-xs text-amber-400/80">
-                      Run in progress…
-                    </BubbleContent>
-                  </Bubble>
+                    <MarkerIcon>
+                      <Spinner className="size-3.5 text-amber-400/90" />
+                    </MarkerIcon>
+                    <MarkerContent className="shimmer text-amber-400/90">
+                      Working…
+                    </MarkerContent>
+                  </Marker>
                 </MessageScrollerItem>
               ) : null}
             </MessageScrollerContent>

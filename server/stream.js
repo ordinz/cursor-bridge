@@ -70,7 +70,9 @@ export function serializeSdkEvent(event, sessionId) {
         : null;
     }
     case "thinking":
-      return createSseEvent("thinking", sessionId, { text: event.text });
+      // High-frequency token stream; bridge UI does not render thinking.
+      // Emitting it freezes the feed (hundreds of setStates per turn).
+      return null;
     case "system":
       return createSseEvent("system", sessionId, {
         subtype: event.subtype,

@@ -112,16 +112,32 @@ Returns the same shape as create/resume. Use this to poll session state between 
 
 ### `WS /api/sessions/:id/ws`
 
-Preferred **real-time watch channel** for the oversight UI. Same JSON event objects as SSE (`assistant`, `tool_call`, `done`, …), each stamped with a monotonic `seq`.
+Preferred **real-time watch channel** for the oversight UI. Same JSON event objects as SSE (`assistant`, `tool_call`, `done`, …), each stamped with a monotonic `seq` persisted in bridge SQLite (survives bridge restart for the same `sessionId`).
 
 | Query | Default | Description |
 |-------|---------|-------------|
-| `replay` | `1` | When `1`, replay buffered events with `seq > after` on connect |
+| `replay` | `1` | When `1`, replay durable events with `seq > after` on connect |
 | `after` | `0` | Resume cursor — skip events with `seq <= after` |
 
 The server sends WebSocket ping frames ~every 20s. Clients may also send `{"type":"ping"}` and receive `{"type":"pong"}`. On disconnect, reconnect with `replay=1&after=<lastSeq>`.
 
 **SSE fallback:** `GET /api/sessions/:id/events` remains available for older clients.
+
+---
+
+### `WS /api/bridge/ws`
+
+Bridge-wide **table change** channel (local Supabase-style). Emits:
+
+```json
+{ "type": "db.change", "table": "sessions", "op": "update", "row": { "...": "..." }, "ts": 0 }
+```
+
+| Query | Default | Description |
+|-------|---------|-------------|
+| `tables` | all | Comma filter: `sessions,prompt_queue,conversation_reads` |
+
+On connect the server sends `{ type: "bridge.hello", tables }`. Missed updates after reconnect: refetch REST lists.
 
 ---
 
@@ -151,7 +167,7 @@ Use this to mirror runs while another agent owns the chat POST. Prefer the WebSo
 | Field | Default | Description |
 |-------|---------|-------------|
 | `prompt` | required | User/agent message (1–100,000 chars, non-empty after trim) |
-| `allowOverlap` | `false` | If `false`, returns **409** when a run is already active |
+| `allowOverlap` | `false` | If `false` and a run is active, enqueue and return **202** (does not 409) |
 | `source` | `"api"` | `"api"` or `"manual"` — echoed on the SSE `user` event for UI labeling |
 
 **400 response (invalid prompt):**
@@ -163,17 +179,28 @@ Use this to mirror runs while another agent owns the chat POST. Prefer the WebSo
 }
 ```
 
-**409 response (session busy):**
+**202 response (queued while busy):**
 
 ```json
 {
-  "error": "Session already has an active run: <sessionId>",
-  "code": "SESSION_BUSY",
-  "sessionId": "<sessionId>"
+  "ok": true,
+  "queued": true,
+  "sessionId": "<sessionId>",
+  "item": { "id": "...", "status": "queued", "prompt": "..." }
 }
 ```
 
-**Response:** `text/event-stream` — see SSE schema below.
+**Response (idle):** `text/event-stream` — see SSE schema below.
+
+---
+
+### `GET /api/queue` / `GET /api/sessions/:id/queue`
+
+List prompt queue rows. Optional `?status=` and (for `/api/queue`) `?project=`.
+
+### `DELETE /api/queue/:qid`
+
+Cancel a `queued` item. Returns **400** if missing or not cancellable.
 
 ---
 
@@ -405,7 +432,7 @@ async function chat(sessionId, prompt) {
 4. Loop:
    - `POST /api/sessions/:id/chat` — consume SSE until `done` (success/cancel) or `error` (failure)
    - Concatenate `assistant` deltas into the full reply
-   - On **409** `SESSION_BUSY`: poll `GET /api/sessions/:id` until `runActive: false`, then retry
+   - On **202** queued: watch WS/events until idle, or poll `GET /api/sessions/:id/queue`
    - On **404**: session expired — create a new one or resume agent
 5. `POST /api/sessions/:id/cancel` — stop an in-flight run (optional; also ends open SSE with `done`/`cancelled`)
 6. `DELETE /api/sessions/:id` — cleanup when finished

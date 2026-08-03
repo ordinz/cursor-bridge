@@ -87,7 +87,13 @@ process.on("SIGTERM", shutdown);
 server.listen(PORT, HOST, () => {
   console.log(`✅ Cursor bridge running on http://${HOST}:${PORT}`);
   console.log(`🔌 Session WebSocket: ws://${HOST}:${PORT}/api/sessions/:id/ws`);
+  console.log(`🔌 Bridge sync WebSocket: ws://${HOST}:${PORT}/api/bridge/ws`);
   console.log(`📁 Projects root: ${PROJECTS_ROOT}`);
+  if (process.env.BRIDGE_DB_PATH) {
+    console.log(`🗄️  Bridge DB: ${process.env.BRIDGE_DB_PATH}`);
+  } else {
+    console.log(`🗄️  Bridge DB: ~/.cursor-bridge/bridge.db`);
+  }
   if (!isTelegramEnabled()) {
     console.log("📴 Telegram disabled (TELEGRAM_ENABLED=0) — no outbound sends");
     if (isPhoneModeOn()) {

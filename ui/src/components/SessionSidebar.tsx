@@ -28,10 +28,12 @@ interface SessionSidebarProps {
   showArchived?: boolean;
   loadingMore?: boolean;
   hasMore?: boolean;
+  searchingServer?: boolean;
   className?: string;
   onProjectChange: (project: string) => void;
   onShowArchivedChange?: (show: boolean) => void;
   onLoadMore?: () => Promise<void>;
+  onSearchServer?: (query: string) => Promise<void>;
   onResumeAgent: (agentId: string) => void;
   onArchiveAgent: (agentId: string) => void;
   onUnarchiveAgent: (agentId: string) => void;
@@ -59,52 +61,23 @@ function AgentArchiveButton({
   const label = agent.name?.trim() || agent.agentId.slice(0, 16);
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        disabled={busy}
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="mt-2 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50 lg:size-8 lg:opacity-0 lg:group-hover:opacity-100"
-            data-testid="agent-archive-button"
-            data-agent-id={agent.agentId}
-            aria-label={`Archive ${label}`}
-            title="Archive agent"
-          />
-        }
-      >
-        {busy ? (
-          <span className="text-sm">…</span>
-        ) : (
-          <ArchiveIcon className="size-4" />
-        )}
-      </AlertDialogTrigger>
-      <AlertDialogContent size="sm" data-testid="agent-archive-dialog">
-        <AlertDialogHeader>
-          <AlertDialogMedia>
-            <ArchiveIcon />
-          </AlertDialogMedia>
-          <AlertDialogTitle>Archive agent?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span className="font-medium text-foreground">“{label}”</span>{" "}
-            moves out of History and Recent. Toggle “Show archived” to find it
-            again, or reopen it to bring it back automatically.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel data-testid="agent-archive-cancel">
-            Cancel
-          </AlertDialogCancel>
-          <AlertDialogAction
-            data-testid="agent-archive-confirm"
-            onClick={onArchive}
-          >
-            Archive
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <Button
+      variant="ghost"
+      size="icon"
+      disabled={busy}
+      className="mt-2 size-11 shrink-0 text-zinc-500 opacity-100 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50 lg:size-8 lg:opacity-0 lg:group-hover:opacity-100"
+      data-testid="agent-archive-button"
+      data-agent-id={agent.agentId}
+      aria-label={`Archive ${label}`}
+      title="Archive agent"
+      onClick={onArchive}
+    >
+      {busy ? (
+        <span className="text-sm">…</span>
+      ) : (
+        <ArchiveIcon className="size-4" />
+      )}
+    </Button>
   );
 }
 
@@ -212,10 +185,12 @@ export function SessionSidebar({
   showArchived = false,
   loadingMore = false,
   hasMore = false,
+  searchingServer = false,
   className = "",
   onProjectChange,
   onShowArchivedChange,
   onLoadMore,
+  onSearchServer,
   onResumeAgent,
   onArchiveAgent,
   onUnarchiveAgent,
@@ -229,14 +204,19 @@ export function SessionSidebar({
   const loadMore = useCallback(async () => {
     await onLoadMore?.();
   }, [onLoadMore]);
+  const searchServer = useCallback(
+    async (q: string) => {
+      await onSearchServer?.(q);
+    },
+    [onSearchServer],
+  );
 
   const { filtered, searchingDeeper } = useAgentListSearch({
     agents,
     query,
     match,
-    hasMore: Boolean(onLoadMore) && hasMore,
-    loadingMore,
-    loadMore,
+    searchServer: onSearchServer ? searchServer : undefined,
+    searchingServer,
   });
 
   return (

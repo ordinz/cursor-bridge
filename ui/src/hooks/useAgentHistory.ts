@@ -75,6 +75,33 @@ export function useAgentHistory(
     }
   }, [project, nextCursor, loadingMore, includeArchived]);
 
+  const [searchingServer, setSearchingServer] = useState(false);
+
+  const searchServer = useCallback(
+    async (q: string) => {
+      if (!project || !q.trim()) return;
+      setSearchingServer(true);
+      setError(null);
+      try {
+        const data = await getAgents(project, {
+          includeArchived,
+          q: q.trim(),
+        });
+        const page = includeArchived
+          ? data.agents
+          : data.agents.filter((a) => !a.archived);
+        setAgents((prev) => mergeAgents(prev, page));
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to search agents",
+        );
+      } finally {
+        setSearchingServer(false);
+      }
+    },
+    [project, includeArchived],
+  );
+
   const removeLocal = useCallback((agentId: string) => {
     setAgents((prev) => prev.filter((a) => a.agentId !== agentId));
   }, []);
@@ -163,6 +190,8 @@ export function useAgentHistory(
     loadingMore,
     hasMore: Boolean(nextCursor),
     loadMore,
+    searchingServer,
+    searchServer,
     deletingId: busyId,
     busyId,
     error,

@@ -303,7 +303,9 @@ Lists models available to your API key (`Cursor.models.list()`).
 
 ### `GET /api/agents?project=app`
 
-Lists persisted local agents for a project cwd.
+Lists persisted local agents for a project cwd. Optional: `cursor`, `limit`, `includeArchived=true`.
+
+With `q=…`, walks older Agent.list pages server-side (up to 12) and returns only name/summary/id matches — used when Recent/History client filters find nothing locally.
 
 ### `DELETE /api/agents/:agentId?project=app`
 
@@ -330,6 +332,27 @@ Returns `{ sessionId, agentId, project, cwd, model, runStatus }`.
 ```
 
 When `includeDevLogs` is `true`, recent local dev server output for the session project is prepended to the agent prompt. The SSE `user` event still shows the original prompt text.
+
+If the session is already running, the prompt is **queued** and the response is **202** with `{ queued: true, item }` instead of SSE. Queued prompts drain automatically when the active run finishes.
+
+### `GET /api/queue` / `GET /api/sessions/:id/queue`
+
+List prompt queue items (`?status=queued|running|done`).
+
+### `DELETE /api/queue/:qid`
+
+Cancel a still-queued item.
+
+## Bridge SQLite
+
+Operational state lives in `~/.cursor-bridge/bridge.db` (override with `BRIDGE_DB_PATH`):
+
+- durable sessions (survive bridge restart; resume reuses `sessionId` per `agentId`)
+- append-only event log for WS/SSE `after=` replay
+- prompt queue with atomic busy claim
+- telegram topics/prefs/phone mode and conversation-reads (migrated once from legacy JSON)
+
+Conversation **history** remains in Cursor’s SDK store. Live fan-out stays WebSocket/SSE; table changes also publish on `WS /api/bridge/ws` as `{ type: "db.change", table, op, row }`.
 
 ## Local dev server logs
 
@@ -380,6 +403,7 @@ Single-turn alias — creates a ephemeral agent, streams text, closes. Same `{ p
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_API_KEY` | — | Required |
+| `BRIDGE_DB_PATH` | `~/.cursor-bridge/bridge.db` | Bridge SQLite (sessions, events, queue, prefs) |
 | `PORT` | `4242` | Listen port |
 | `HOST` | `127.0.0.1` | Bind address |
 | `PROJECTS_ROOT` | `~/dev/mx/https` | Project allowlist root |

@@ -1,19 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
+import { useTempBridgeDb } from "./test-db.js";
+
+useTempBridgeDb();
+
+const {
   mainControlKeyboard,
   modelPickerKeyboard,
   openUiKeyboard,
   parseCallbackData,
   postRunKeyboard,
   settingsKeyboard,
-} from "./telegram-keyboards.js";
-import { _setTelegramModelsForTests } from "./telegram-models.js";
-import {
+} = await import("./telegram-keyboards.js");
+const { _setTelegramModelsForTests } = await import("./telegram-models.js");
+const {
   _resetTelegramPrefsForTests,
   getTelegramPrefs,
   updateTelegramPrefs,
-} from "./telegram-prefs.js";
+} = await import("./telegram-prefs.js");
 
 test("parseCallbackData covers control ops", () => {
   assert.deepEqual(parseCallbackData("c:phone"), { op: "phone" });
@@ -70,7 +74,7 @@ test("postRunKeyboard adds Open in UI url button when agent known", () => {
   assert.ok(open);
   assert.equal(
     open.url,
-    "https://ordins-cursor-bridge.kairose.com/?project=app&agent=agent-1",
+    "https://ordins-cursor-bridge.kairose.com/?project=app&agent=agent-1&tab=feed",
   );
   assert.equal(open.callback_data, undefined);
   if (prev === undefined) delete process.env.BRIDGE_UI_ORIGIN;

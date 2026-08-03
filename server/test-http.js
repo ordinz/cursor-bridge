@@ -1,8 +1,11 @@
 import express from "express";
 import { createRouter } from "./routes.js";
 import { SessionManager } from "./sessions.js";
+import { persistSessionRecord } from "./db.js";
+import { useTempBridgeDb } from "./test-db.js";
 
 export function createTestApp() {
+  useTempBridgeDb();
   const sessions = new SessionManager();
   const app = express();
   app.use(express.json({ limit: "8mb" }));
@@ -32,29 +35,40 @@ export async function withTestServer(fn) {
   }
 }
 
+function persistSeed(record) {
+  persistSessionRecord(record);
+}
+
 export function seedRunningSession(sessions, id = "11111111-1111-4111-8111-111111111111") {
-  sessions.sessions.set(id, {
+  const record = {
     sessionId: id,
     agent: { send: async () => { throw new Error("not mocked"); } },
     agentId: "agent-test",
     project: "app",
     cwd: "/tmp/app",
     model: "default",
+    mode: "agent",
     name: "test",
     namedFromPrompt: true,
+    namingScheduled: false,
+    telegramThreadId: null,
     activeRun: { supports: () => true, cancel: async () => {} },
     abortController: null,
     runStatus: "running",
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
+    listActivityAt: Date.now(),
     lastPrompt: "hi",
     lastAssistantSnippet: null,
-  });
+    closedAt: null,
+  };
+  sessions.sessions.set(id, record);
+  persistSeed(record);
   return id;
 }
 
 export function seedIdleSession(sessions, id = "22222222-2222-4222-8222-222222222222") {
-  sessions.sessions.set(id, {
+  const record = {
     sessionId: id,
     agent: {
       send: async () => ({
@@ -73,15 +87,22 @@ export function seedIdleSession(sessions, id = "22222222-2222-4222-8222-22222222
     project: "app",
     cwd: "/tmp/app",
     model: "default",
+    mode: "agent",
     name: "idle",
     namedFromPrompt: true,
+    namingScheduled: false,
+    telegramThreadId: null,
     activeRun: null,
     abortController: null,
     runStatus: "idle",
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
+    listActivityAt: Date.now(),
     lastPrompt: null,
     lastAssistantSnippet: null,
-  });
+    closedAt: null,
+  };
+  sessions.sessions.set(id, record);
+  persistSeed(record);
   return id;
 }

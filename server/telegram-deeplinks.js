@@ -55,6 +55,7 @@ export function uiSessionUrl({ origin, project, agentId } = {}) {
   const params = new URLSearchParams({
     project: String(project),
     agent: String(agentId),
+    tab: "feed",
   });
   return `${base}/?${params.toString()}`;
 }

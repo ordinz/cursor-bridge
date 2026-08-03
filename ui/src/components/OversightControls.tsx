@@ -1,17 +1,3 @@
-import type { Session } from "../lib/types";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-
 const REMOTE_HEALTH_URL = "https://cursor-mcp-bridge.kairose.com/health";
 
 function ExternalLinkIcon({ className }: { className?: string }) {
@@ -94,7 +80,6 @@ function HealthDot({
 }
 
 interface OversightControlsProps {
-  session: Session | null;
   topic: string;
   runStatus: string;
   apiOk: boolean;
@@ -108,7 +93,6 @@ interface OversightControlsProps {
 }
 
 export function OversightControls({
-  session,
   topic,
   runStatus,
   apiOk,
@@ -209,49 +193,17 @@ export function OversightControls({
             </a>
           </div>
           {canArchive && (
-            <AlertDialog>
-              <AlertDialogTrigger
-                disabled={archiving || running}
-                render={
-                  <button
-                    type="button"
-                    className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-zinc-400 active:bg-zinc-800 active:text-zinc-200 disabled:opacity-40"
-                    data-testid="archive-session-button"
-                    aria-label="Archive conversation"
-                    title="Archive conversation"
-                  />
-                }
-              >
-                <ArchiveIcon className="h-5 w-5 lg:h-4 lg:w-4" />
-              </AlertDialogTrigger>
-              <AlertDialogContent size="sm" data-testid="archive-session-dialog">
-                <AlertDialogHeader>
-                  <AlertDialogMedia>
-                    <ArchiveIcon />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle>Archive conversation?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    <span className="font-medium text-foreground">
-                      “{topic}”
-                    </span>{" "}
-                    moves out of History and Recent. Toggle “Show archived” to
-                    find it again, or reopen it to bring it back
-                    automatically.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel data-testid="archive-session-cancel">
-                    Cancel
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    data-testid="archive-session-confirm"
-                    onClick={onArchiveSession}
-                  >
-                    Archive
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <button
+              type="button"
+              disabled={archiving || running}
+              onClick={onArchiveSession}
+              className="flex min-h-10 min-w-10 items-center justify-center rounded-full text-zinc-400 active:bg-zinc-800 active:text-zinc-200 disabled:opacity-40"
+              data-testid="archive-session-button"
+              aria-label="Archive conversation"
+              title="Archive conversation"
+            >
+              <ArchiveIcon className="h-5 w-5 lg:h-4 lg:w-4" />
+            </button>
           )}
           {running && (
             <button

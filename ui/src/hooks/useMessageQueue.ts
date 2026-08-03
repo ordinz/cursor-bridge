@@ -30,6 +30,27 @@ function newDraftKeyFor(draftKey: string): string | null {
   return `${project}:new`;
 }
 
+/** Only migrate `:new` → agent when that is the actual navigation we just took. */
+function shouldMigrateFromNew(
+  prevKey: string | null,
+  nextKey: string,
+): boolean {
+  if (!prevKey || prevKey === nextKey) return false;
+  const prevSep = prevKey.indexOf(":");
+  const nextSep = nextKey.indexOf(":");
+  if (prevSep < 0 || nextSep < 0) return false;
+  const prevProject = prevKey.slice(0, prevSep);
+  const prevAgent = prevKey.slice(prevSep + 1);
+  const nextProject = nextKey.slice(0, nextSep);
+  const nextAgent = nextKey.slice(nextSep + 1);
+  return (
+    Boolean(prevProject) &&
+    prevProject === nextProject &&
+    prevAgent === "new" &&
+    nextAgent !== "new"
+  );
+}
+
 function isValidImage(img: unknown): img is QueuedImage {
   if (!img || typeof img !== "object") return false;
   const o = img as Record<string, unknown>;
@@ -84,9 +105,12 @@ function saveQueue(draftKey: string, queue: QueuedMessage[]) {
   }
 }
 
-function loadQueueWithMigration(draftKey: string): QueuedMessage[] {
+function loadQueueWithMigration(
+  draftKey: string,
+  migrateFromNew: boolean,
+): QueuedMessage[] {
   const queue = loadQueue(draftKey);
-  if (queue.length > 0) return queue;
+  if (!migrateFromNew || queue.length > 0) return queue;
 
   const fromNewKey = newDraftKeyFor(draftKey);
   if (!fromNewKey) return queue;
@@ -103,16 +127,34 @@ function nextId() {
   return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function useMessageQueue(draftKey: string) {
+export function useMessageQueue(
+  draftKey: string,
+  /** When true on a `:new` → agent transition, claim the `:new` queue (kickoff only). */
+  allowMigrateFromNew?: () => boolean,
+) {
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [hydratedKey, setHydratedKey] = useState<string | null>(null);
   const queueRef = useRef<QueuedMessage[]>([]);
+  const prevDraftKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const next = loadQueueWithMigration(draftKey);
+    const prev = prevDraftKeyRef.current;
+    const migrateFromNew =
+      shouldMigrateFromNew(prev, draftKey) &&
+      Boolean(allowMigrateFromNew?.());
+
+    // Flush outgoing queue before key swap (same race as composer drafts).
+    if (prev && prev !== draftKey && hydratedKey === prev) {
+      saveQueue(prev, queueRef.current);
+    }
+    prevDraftKeyRef.current = draftKey;
+
+    const next = loadQueueWithMigration(draftKey, migrateFromNew);
     queueRef.current = next;
     setQueue(next);
     setHydratedKey(draftKey);
+    // hydratedKey / allowMigrateFromNew read for this key change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
 
   useEffect(() => {

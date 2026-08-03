@@ -13,6 +13,7 @@ import {
   unarchiveLocalAgent,
 } from "./agents.js";
 import { loadAgentHistory } from "./agent-history.js";
+import { searchLocalAgents } from "./agent-search.js";
 import { checkCursorConnectivity } from "./cursor-health.js";
 import {
   errorBody,
@@ -48,7 +49,6 @@ import {
 } from "./dev-logs.js";
 import {
   InvalidRequestError,
-  buildDisplayPromptWithImages,
   validateChatPayload,
   validateCombinedPrompt,
   validateProjectId,
@@ -61,6 +61,13 @@ import {
   markConversationRead,
   removeConversationRead,
 } from "./conversation-reads.js";
+import {
+  cancelQueueItem,
+  enqueueOrClaim,
+  getQueue,
+  listQueue,
+} from "./prompt-queue.js";
+import { drainSessionQueue } from "./execute-prompt.js";
 
 export function createRouter(sessions) {
   const router = express.Router();
@@ -182,6 +189,8 @@ export function createRouter(sessions) {
       const project = validateProjectId(req.query.project);
       const cwd = resolveProject(project);
       const includeArchived = req.query.includeArchived === "true";
+      const q =
+        typeof req.query.q === "string" ? req.query.q.trim() : "";
       const cursor =
         typeof req.query.cursor === "string" && req.query.cursor
           ? req.query.cursor
@@ -191,6 +200,24 @@ export function createRouter(sessions) {
         Number.isFinite(limitRaw) && limitRaw > 0
           ? Math.min(Math.floor(limitRaw), 100)
           : 50;
+
+      // Deep search: walk Agent.list pages server-side and return matches.
+      if (q) {
+        const searched = await searchLocalAgents({
+          list: (opts) => Agent.list(opts),
+          cwd,
+          query: q,
+          includeArchived,
+        });
+        res.json({
+          agents: searched.agents,
+          nextCursor: searched.nextCursor,
+          searchExhausted: searched.exhausted,
+          pagesSearched: searched.pagesSearched,
+        });
+        return;
+      }
+
       const result = await Agent.list({
         runtime: "local",
         cwd,
@@ -226,10 +253,14 @@ export function createRouter(sessions) {
   router.post("/agents/:agentId/archive", async (req, res, next) => {
     try {
       const project = validateProjectId(req.query.project);
-      const closed = await sessions.closeByAgentId(req.params.agentId);
+      const closedSessions = await sessions.closeByAgentId(req.params.agentId);
       await archiveLocalAgent(req.params.agentId, project);
       removeConversationRead(project, req.params.agentId);
-      res.json({ ok: true, closedSession: closed });
+      res.json({
+        ok: true,
+        closedSession: closedSessions[0] ?? null,
+        closedSessions,
+      });
     } catch (err) {
       next(err);
     }
@@ -248,10 +279,14 @@ export function createRouter(sessions) {
   router.delete("/agents/:agentId", async (req, res, next) => {
     try {
       const project = validateProjectId(req.query.project);
-      const closed = await sessions.closeByAgentId(req.params.agentId);
+      const closedSessions = await sessions.closeByAgentId(req.params.agentId);
       await deleteLocalAgent(req.params.agentId, project);
       removeConversationRead(project, req.params.agentId);
-      res.json({ ok: true, closedSession: closed });
+      res.json({
+        ok: true,
+        closedSession: closedSessions[0] ?? null,
+        closedSessions,
+      });
     } catch (err) {
       next(err);
     }
@@ -361,6 +396,55 @@ export function createRouter(sessions) {
     }
   });
 
+  router.get("/sessions/:id/queue", (req, res, next) => {
+    try {
+      const id = validateSessionId(req.params.id);
+      sessions.require(id);
+      const status = req.query.status ? String(req.query.status) : null;
+      res.json({ items: listQueue({ sessionId: id, status }) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/queue", (req, res, next) => {
+    try {
+      const project = req.query.project
+        ? validateProjectId(String(req.query.project))
+        : null;
+      const status = req.query.status ? String(req.query.status) : null;
+      res.json({ items: listQueue({ project, status }) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/queue/:qid", (req, res, next) => {
+    try {
+      const item = getQueue(req.params.qid);
+      if (!item) {
+        throw new InvalidRequestError("queue item not found");
+      }
+      res.json(item);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete("/queue/:qid", (req, res, next) => {
+    try {
+      const item = cancelQueueItem(req.params.qid);
+      if (!item) {
+        throw new InvalidRequestError(
+          "queue item not found or not cancellable",
+        );
+      }
+      res.json({ ok: true, item });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/sessions/:id/chat", async (req, res, next) => {
     const { allowOverlap = false, includeDevLogs = false } = req.body ?? {};
 
@@ -371,14 +455,37 @@ export function createRouter(sessions) {
         req.body?.images,
       );
 
-      let record;
-      if (allowOverlap) {
-        record = sessions.get(id);
-        if (!record) {
-          throw new SessionNotFoundError(id);
-        }
-      } else {
-        record = sessions.assertCanChat(id);
+      let record = await sessions.ensureLiveAgent(id);
+
+      const source = req.body?.source === "manual" ? "manual" : "api";
+      const claim = enqueueOrClaim({
+        sessionId: id,
+        project: record.project,
+        prompt: userPrompt,
+        images,
+        includeDevLogs: Boolean(includeDevLogs),
+        source,
+        allowOverlap: Boolean(allowOverlap),
+      });
+
+      if (claim.reason === "missing") {
+        throw new SessionNotFoundError(id);
+      }
+
+      if (claim.mode === "queued") {
+        return res.status(202).json({
+          ok: true,
+          queued: true,
+          item: claim.item,
+          sessionId: id,
+        });
+      }
+
+      // DB already marked running for the immediate claim — sync memory.
+      record = sessions.require(id);
+      if (record.runStatus !== "running") {
+        record.runStatus = "running";
+        sessions.persist(id);
       }
 
       let agentPrompt = userPrompt;
@@ -407,9 +514,11 @@ export function createRouter(sessions) {
         sessions.notePrompt(id, userPrompt);
         sessions.startRunEvents(id);
 
-        const source = req.body?.source === "manual" ? "manual" : "api";
         const publish = (event) => sessions.publishEvent(id, event, res);
-        const displayText = buildDisplayPromptWithImages(userPrompt, images);
+        // Never embed base64 in SSE — a single JPEG can stall the feed after
+        // "Run started" so the UI only shows status + "Run in progress…".
+        // The web client paints attachments optimistically; agent.send gets
+        // structured SDK images below.
         const sdkImages = images.map(({ data, mimeType }) => ({
           data,
           mimeType,
@@ -451,7 +560,7 @@ export function createRouter(sessions) {
 
         publish(
           createSseEvent("user", id, {
-            text: displayText,
+            text: userPrompt,
             source,
             ...(sdkImages.length ? { imageCount: sdkImages.length } : {}),
           }),
@@ -517,6 +626,7 @@ export function createRouter(sessions) {
         if (!res.writableEnded) {
           res.end();
         }
+        void drainSessionQueue(sessions, id);
       }
     } catch (err) {
       if (

@@ -17,6 +17,7 @@ import { useChatSession, SESSION_STORAGE_KEY } from "./hooks/useChatSession";
 import { useModels } from "./hooks/useModels";
 import { useProjects } from "./hooks/useProjects";
 import { useRecentConversations } from "./hooks/useRecentConversations";
+import { toast } from "@/components/ui/toast";
 
 export default function App() {
   const { projects, loading: projectsLoading } = useProjects();
@@ -29,19 +30,26 @@ export default function App() {
         tab: consoleUrlParsers.tab,
         agent: consoleUrlParsers.agent,
       },
+      // Default replace keeps sync/ephemeral updates out of the stack.
+      // Navigational transitions pass `{ history: "push" }` per call.
       { history: "replace" },
     );
   const setMobilePanel = useCallback(
     (next: MobilePanel) => {
-      void setUrlState({ tab: next });
+      if (next === mobilePanel) return;
+      void setUrlState({ tab: next }, { history: "push" });
     },
-    [setUrlState],
+    [mobilePanel, setUrlState],
   );
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [devStatus, setDevStatus] = useState<DevStatus | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   /** Blocks URL auto-resume while clearing/switching sessions. */
   const suppressResumeRef = useRef(false);
+  /** Dedupes URL→session resume when beginResume nulls session mid-effect. */
+  const resumeTargetRef = useRef<string | null>(null);
+  /** First paint may hydrate a session before ?agent= exists — stamp URL once. */
+  const urlSyncReadyRef = useRef(false);
 
   const apiOk = health?.ok ?? false;
   const cursorReady = health?.cursor.ready ?? false;
@@ -53,6 +61,8 @@ export default function App() {
     loadingMore: historyLoadingMore,
     hasMore: historyHasMore,
     loadMore: loadMoreHistory,
+    searchServer: searchHistory,
+    searchingServer: historySearchingServer,
     refresh: refreshAgents,
     unarchiveAgent: unarchiveHistoryAgent,
     deleteAgent: deleteHistoryAgent,
@@ -67,6 +77,8 @@ export default function App() {
     loadingMore: recentLoadingMore,
     hasMore: recentHasMore,
     loadMore: loadMoreRecent,
+    searchServer: searchRecent,
+    searchingServer: recentSearchingServer,
     refresh: refreshRecent,
     markRead: markRecentRead,
     archiveAgent: archiveRecentAgent,
@@ -92,11 +104,18 @@ export default function App() {
   } = useChatSession();
 
   const setProject = useCallback(
-    (next: string) => {
+    (
+      next: string,
+      options?: { history?: "push" | "replace" },
+    ) => {
       if (next === project) return;
       suppressResumeRef.current = true;
+      resumeTargetRef.current = null;
       clearSession();
-      void setUrlState({ project: next, agent: null }).finally(() => {
+      void setUrlState(
+        { project: next, agent: null },
+        { history: options?.history ?? "push" },
+      ).finally(() => {
         suppressResumeRef.current = false;
       });
     },
@@ -119,7 +138,7 @@ export default function App() {
     const enabled = projects.filter((p) => p.canCreateSession !== false);
     if (!enabled.length) return;
     if (!enabled.some((p) => p.id === project)) {
-      setProject(enabled[0].id);
+      setProject(enabled[0].id, { history: "replace" });
     }
   }, [projects, project]);
 
@@ -149,26 +168,53 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [devStatusProject]);
 
-  // Session is source of truth while active — push agent id into the URL.
+  // URL is source of truth for the selected agent (supports browser back/forward).
   useEffect(() => {
-    if (!session?.agentId) return;
-    if (urlAgent === session.agentId) return;
-    setUrlAgent(session.agentId);
-  }, [session?.agentId, urlAgent, setUrlAgent]);
+    if (projectsLoading || suppressResumeRef.current) return;
 
-  // Resume when URL has an agent and we don't have a live session yet.
-  useEffect(() => {
-    if (projectsLoading || session || !urlAgent || suppressResumeRef.current) {
+    // Snapshot hydration can restore a session before the URL has ?agent=.
+    // Stamp it in once so we don't treat that as "back to new chat".
+    if (!urlSyncReadyRef.current) {
+      urlSyncReadyRef.current = true;
+      if (session?.agentId && !urlAgent) {
+        setUrlAgent(session.agentId);
+        resumeTargetRef.current = `${session.project ?? project}:${session.agentId}`;
+        return;
+      }
+    }
+
+    if (!urlAgent) {
+      resumeTargetRef.current = null;
+      // Back/forward (or New chat) cleared ?agent= — drop the live session.
+      if (session) clearSession();
       return;
     }
 
+    if (
+      session?.agentId === urlAgent &&
+      (!session.project || session.project === project)
+    ) {
+      resumeTargetRef.current = null;
+      return;
+    }
+
+    const targetKey = `${project}:${urlAgent}`;
+    if (resumeTargetRef.current === targetKey) return;
+    resumeTargetRef.current = targetKey;
+
     let cancelled = false;
     const agentId = urlAgent;
+    const projectId = project;
     void (async () => {
       try {
-        const resumed = await resumeAgent(agentId, project, selectedModel);
-        if (cancelled || !resumed) return;
+        beginResume(agentId, projectId);
+        const resumed = await resumeAgent(agentId, projectId, selectedModel);
+        if (cancelled) return;
+        if (!resumed) {
+          resumeTargetRef.current = null;
+        }
       } catch {
+        resumeTargetRef.current = null;
         if (!cancelled) setUrlAgent(null);
       }
     })();
@@ -181,7 +227,9 @@ export default function App() {
     urlAgent,
     project,
     selectedModel,
+    beginResume,
     resumeAgent,
+    clearSession,
     setUrlAgent,
   ]);
 
@@ -218,15 +266,26 @@ export default function App() {
   }, [session?.name, refreshAgents, refreshRecent]);
 
   useEffect(() => {
+    // Stamp ?tab= when missing (deep links, first visit) so reload restores the panel.
+    try {
+      if (new URLSearchParams(window.location.search).has("tab")) return;
+    } catch {
+      return;
+    }
+    void setUrlState({ tab: mobilePanel }, { history: "replace" });
+  }, [mobilePanel, setUrlState]);
+
+  useEffect(() => {
     if (mobilePanel !== "recent") return;
     void refreshRecent();
   }, [mobilePanel, refreshRecent]);
 
   const handleNewSession = useCallback(async () => {
     suppressResumeRef.current = true;
+    resumeTargetRef.current = null;
     clearSession();
     try {
-      await setUrlState({ agent: null, tab: "feed" });
+      await setUrlState({ agent: null, tab: "feed" }, { history: "push" });
     } finally {
       suppressResumeRef.current = false;
     }
@@ -240,18 +299,22 @@ export default function App() {
         return;
       }
       suppressResumeRef.current = true;
+      resumeTargetRef.current = `${projectId}:${agentId}`;
       beginResume(agentId, projectId);
       try {
-        await setUrlState({
-          project: projectId,
-          agent: agentId,
-          tab: "feed",
-        });
-        setMobilePanel("feed");
+        await setUrlState(
+          {
+            project: projectId,
+            agent: agentId,
+            tab: "feed",
+          },
+          { history: "push" },
+        );
         await resumeAgent(agentId, projectId, selectedModel);
         void refreshAgents();
         void refreshRecent();
       } catch {
+        resumeTargetRef.current = null;
         await setUrlState({ agent: null });
       } finally {
         suppressResumeRef.current = false;
@@ -282,9 +345,22 @@ export default function App() {
     ) => {
       let active = session;
       if (!active) {
-        active = await startSession(project, selectedModel);
+        suppressResumeRef.current = true;
+        try {
+          active = await startSession(project, selectedModel);
+          // Replace so the new agent id doesn't stack an extra history entry
+          // on top of New chat / empty feed.
+          await setUrlState(
+            { agent: active.agentId, tab: "feed" },
+            { history: "replace" },
+          );
+          resumeTargetRef.current = `${project}:${active.agentId}`;
+        } finally {
+          suppressResumeRef.current = false;
+        }
+      } else {
+        setMobilePanel("feed");
       }
-      setMobilePanel("feed");
       await sendPrompt(prompt, "manual", active, {
         includeDevLogs: options.includeDevLogs,
         allowOverlap: options.allowOverlap,
@@ -302,6 +378,7 @@ export default function App() {
       refreshAgents,
       refreshRecent,
       setMobilePanel,
+      setUrlState,
     ],
   );
 
@@ -323,47 +400,6 @@ export default function App() {
       });
     },
     [handlePromptSend],
-  );
-
-  const handleArchiveAgent = useCallback(
-    async (
-      agentId: string,
-      projectId: string = project,
-      opts?: { goToRecent?: boolean },
-    ) => {
-      try {
-        // Always update Recent local state (agents + live session overlay).
-        // History is project-scoped and refreshed when it matches.
-        await archiveRecentAgent(agentId, projectId);
-        if (projectId === project) {
-          void refreshAgents();
-        }
-        if (session?.agentId === agentId || urlAgent === agentId) {
-          suppressResumeRef.current = true;
-          clearSession();
-          try {
-            await setUrlState({ agent: null });
-          } finally {
-            suppressResumeRef.current = false;
-          }
-        }
-        if (opts?.goToRecent) {
-          setMobilePanel("recent");
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    },
-    [
-      archiveRecentAgent,
-      refreshAgents,
-      project,
-      session,
-      urlAgent,
-      clearSession,
-      setUrlState,
-      setMobilePanel,
-    ],
   );
 
   const handleUnarchiveAgent = useCallback(
@@ -391,9 +427,94 @@ export default function App() {
     ],
   );
 
+  const handleArchiveAgent = useCallback(
+    async (
+      agentId: string,
+      projectId: string = project,
+      opts?: { goToRecent?: boolean },
+    ) => {
+      const fromHistory = agents.find((a) => a.agentId === agentId);
+      const fromRecent = recentAgents.find((a) => a.agentId === agentId);
+      const label =
+        (session?.agentId === agentId ? session.name?.trim() : undefined) ||
+        fromHistory?.name?.trim() ||
+        fromRecent?.name?.trim() ||
+        agentId.slice(0, 16);
+
+      try {
+        // Drop URL/session first so an in-flight resume can't recreate a
+        // live session after archive closes the old ones.
+        if (session?.agentId === agentId || urlAgent === agentId) {
+          suppressResumeRef.current = true;
+          resumeTargetRef.current = null;
+          clearSession();
+          try {
+            await setUrlState(
+              opts?.goToRecent
+                ? { agent: null, tab: "recent" }
+                : { agent: null },
+              opts?.goToRecent ? { history: "push" } : undefined,
+            );
+          } catch {
+            // Still archive even if URL sync fails.
+          }
+        } else if (opts?.goToRecent) {
+          setMobilePanel("recent");
+        }
+        // Always update Recent local state (agents + live session overlay).
+        // History is project-scoped and refreshed when it matches.
+        await archiveRecentAgent(agentId, projectId);
+        if (projectId === project) {
+          void refreshAgents();
+        }
+
+        const toastId = toast.add({
+          title: "Archived",
+          description: `“${label}” moved out of History and Recent.`,
+          timeout: 8000,
+          actionProps: {
+            children: "Undo",
+            "aria-label": "Undo archive",
+            onClick() {
+              toast.close(toastId);
+              void handleUnarchiveAgent(agentId, projectId);
+            },
+          },
+        });
+      } catch (err) {
+        console.error(err);
+      } finally {
+        suppressResumeRef.current = false;
+      }
+    },
+    [
+      agents,
+      recentAgents,
+      archiveRecentAgent,
+      refreshAgents,
+      project,
+      session,
+      urlAgent,
+      clearSession,
+      setUrlState,
+      setMobilePanel,
+      handleUnarchiveAgent,
+    ],
+  );
+
   const handleDeleteAgent = useCallback(
     async (agentId: string, projectId: string = project) => {
       try {
+        if (session?.agentId === agentId || urlAgent === agentId) {
+          suppressResumeRef.current = true;
+          resumeTargetRef.current = null;
+          clearSession();
+          try {
+            await setUrlState({ agent: null });
+          } catch {
+            // Still delete even if URL sync fails.
+          }
+        }
         if (projectId === project) {
           await deleteHistoryAgent(agentId);
         } else {
@@ -403,17 +524,10 @@ export default function App() {
         if (projectId === project) {
           void refreshAgents();
         }
-        if (session?.agentId === agentId || urlAgent === agentId) {
-          suppressResumeRef.current = true;
-          clearSession();
-          try {
-            await setUrlState({ agent: null });
-          } finally {
-            suppressResumeRef.current = false;
-          }
-        }
       } catch (err) {
         console.error(err);
+      } finally {
+        suppressResumeRef.current = false;
       }
     },
     [
@@ -519,7 +633,6 @@ export default function App() {
     >
       <TraceabilityInspector />
       <OversightControls
-        session={session}
         topic={topic}
         runStatus={runStatus}
         apiOk={apiOk}
@@ -553,9 +666,11 @@ export default function App() {
           showArchived={showArchived}
           loadingMore={historyLoadingMore}
           hasMore={historyHasMore}
+          searchingServer={historySearchingServer}
           onProjectChange={setProject}
           onShowArchivedChange={setShowArchived}
           onLoadMore={loadMoreHistory}
+          onSearchServer={searchHistory}
           onResumeAgent={(id) => void handleResumeAgent(id)}
           onArchiveAgent={(id) => void handleArchiveAgent(id)}
           onUnarchiveAgent={(id) => void handleUnarchiveAgent(id)}
@@ -576,8 +691,10 @@ export default function App() {
           showArchived={showArchived}
           loadingMore={recentLoadingMore}
           hasMore={recentHasMore}
+          searchingServer={recentSearchingServer}
           onShowArchivedChange={setShowArchived}
           onLoadMore={loadMoreRecent}
+          onSearchServer={searchRecent}
           onResumeAgent={(id, projectId) =>
             void handleResumeAgent(id, projectId)
           }

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import {
+import { useTempBridgeDb } from "./test-db.js";
+
+useTempBridgeDb();
+
+const {
   _registerBindingForTests,
   _resetTelegramTopicStoreForTests,
   formatAgentTopicName,
@@ -8,7 +12,7 @@ import {
   getBindingBySessionId,
   getBindingByThreadId,
   resolveTelegramThread,
-} from "./telegram-topics.js";
+} = await import("./telegram-topics.js");
 
 const prev = {
   TELEGRAM_TOPIC_STATUS: process.env.TELEGRAM_TOPIC_STATUS,
@@ -18,6 +22,7 @@ const prev = {
 };
 
 before(() => {
+  useTempBridgeDb();
   process.env.TELEGRAM_TOPIC_STATUS = "2";
   process.env.TELEGRAM_TOPIC_APP = "3";
   process.env.TELEGRAM_TOPIC_WWW = "4";
